@@ -100,6 +100,45 @@ label.inline input{width:64px;font:inherit;font-family:var(--mono);background:va
 kbd{font-family:var(--mono);background:var(--panel2);border:1px solid var(--line);border-radius:5px;padding:1px 6px;color:var(--fg)}
 .toast{position:fixed;left:50%;bottom:calc(16px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--panel2);border:1px solid var(--line);padding:10px 14px;border-radius:10px;font-size:14px;max-width:90vw;opacity:0;pointer-events:none;transition:opacity .2s}
 .toast.show{opacity:1}
+.mini,.tabs{display:none}
+@media (max-width:700px){
+  body{padding-bottom:calc(64px + env(safe-area-inset-bottom,0px))}
+  .wrap{padding-block:10px 12px;gap:10px}
+  header{gap:4px}.brand{font-size:24px}.tag{display:none}.privacy{font-size:10px}
+  .panel{padding:12px;gap:10px;border-radius:12px}
+  body[data-tab="song"] .panel.voice,body[data-tab="voice"] .panel.song{display:none}
+  canvas.wave{height:88px}
+  .transport{gap:8px}.transport button{padding:8px 12px;min-height:38px}
+  .controls{grid-template-columns:1fr 1fr;gap:8px}
+  .ctl{padding:10px;gap:6px}.ctl.loop{grid-column:1 / -1}
+  .big{font-size:26px}
+  .ctl .row button{min-height:36px;padding:6px 6px;font-size:13px}
+  .presets{flex-wrap:nowrap;gap:4px}.presets button{min-height:28px;font-size:11px;padding:2px 0;flex:1;min-width:0}
+  .ctl h3 b{font-size:11px}
+  .transport .time{width:100%;text-align:right;margin-left:0;margin-top:-4px}
+  .keys{display:none}
+  #export{width:100%}
+  .mini{display:flex;gap:8px;align-items:center}.mini .minisong{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;color:var(--muted)}
+  .mini button{min-height:36px;padding:6px 12px}
+  .monhead h2{font-size:16px}.monhead .hint{display:none}
+  .monhead button{min-height:36px;padding:6px 10px;font-size:13px}
+  .mon{grid-template-columns:96px 1fr;gap:10px}
+  .note{font-size:44px;min-height:44px}.note small{font-size:16px}
+  .hz{font-size:11px}
+  .meter{height:26px}
+  canvas.trace{height:150px}
+  canvas.piano{height:40px}
+  .session{grid-template-columns:1fr 1fr;gap:8px}
+  .session{align-items:start}.stat{padding:8px 10px;gap:2px}.stat .k{font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.stat b{font-size:16px}.stat small{font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #keyfind{font-size:12px}
+  .coach{font-size:13px}
+  .warmctl label.inline{font-size:12px}
+  .tabs{position:fixed;left:0;right:0;bottom:0;display:flex;background:var(--panel);border-top:1px solid var(--line);padding:6px 16px calc(6px + env(safe-area-inset-bottom,0px));gap:8px;z-index:20}
+  .tab{flex:1;background:none;border:none;border-radius:10px;color:var(--muted);font-size:12px;font-weight:600;display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 0;min-height:48px}
+  .tab .ico{font-size:20px;line-height:1}
+  .tab.on{color:var(--accent);background:var(--panel2)}
+  .toast{bottom:calc(76px + env(safe-area-inset-bottom,0px))}
+}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
@@ -111,7 +150,7 @@ kbd{font-family:var(--mono);background:var(--panel2);border:1px solid var(--line
     <div class="privacy">Audio never leaves your device</div>
   </header>
 
-  <section class="panel">
+  <section class="panel song" id="songPanel">
     <label class="drop" id="drop"><strong>Drop a song here</strong> or tap to choose · mp3, wav, aiff, m4a, aac, flac, mp4, mov<input type="file" id="file" accept="audio/*,video/*,.m4a,.mp3,.wav,.aac,.flac,.ogg,.opus,.aif,.aiff,.caf,.mp4,.mov,.webm,.m4v"></label>
     <div class="recent" id="recent" hidden></div>
     <div class="songrow" id="songrow" hidden>
@@ -141,7 +180,7 @@ kbd{font-family:var(--mono);background:var(--panel2);border:1px solid var(--line
         <input type="range" id="speed" min="50" max="150" value="100" step="1" aria-label="Speed percent">
         <div class="row presets"><button data-s="50">50</button><button data-s="75">75</button><button data-s="90">90</button><button data-s="100">100</button><button data-s="110">110</button></div>
       </div>
-      <div class="ctl">
+      <div class="ctl loop">
         <h3>Loop <b id="looplbl">off</b></h3>
         <div class="row"><button id="setA">Set A</button><button id="setB">Set B</button></div>
         <div class="row"><button id="loopToggle" disabled>Loop on</button><button id="loopClear">Clear</button></div>
@@ -155,7 +194,13 @@ kbd{font-family:var(--mono);background:var(--panel2);border:1px solid var(--line
     </div>
   </section>
 
-  <section class="panel">
+  <section class="panel voice" id="voicePanel">
+    <div class="mini" id="mini">
+      <button class="primary" id="play2" disabled>Play</button>
+      <button id="loop2" disabled>Loop</button>
+      <span class="minisong" id="miniSong">No song</span>
+      <span class="time"><span id="tcur2">0:00</span></span>
+    </div>
     <div class="monhead">
       <h2>Pitch monitor</h2>
       <span class="hint">Wear headphones so the mic hears only you. Green is within 10 cents.</span>
@@ -207,15 +252,20 @@ kbd{font-family:var(--mono);background:var(--panel2);border:1px solid var(--line
     <div class="hint" id="keyfind">Tap the piano on your comfortable top note. With a reference take, Shed will suggest the key.</div>
     <div class="session">
       <div class="stat"><span class="k">Range today</span><b id="stRange">—</b><small id="stRangeSub"></small></div>
-      <div class="stat"><span class="k">Centre on held notes</span><b id="stTune">—</b><small id="stTuneSub"></small></div>
+      <div class="stat"><span class="k">Held notes</span><b id="stTune">—</b><small id="stTuneSub"></small></div>
       <div class="stat"><span class="k">Where you sit</span><b id="stBias">—</b><small id="stBiasSub"></small></div>
       <div class="stat"><span class="k">Sustain</span><b id="stSteady">—</b><small id="stSteadySub"></small></div>
+      <div class="stat"><span class="k">Runs</span><b id="stRuns">—</b><small id="stRunsSub"></small></div>
       <div class="stat" id="stMatchBox" hidden><span class="k">With the reference</span><b id="stMatch">—</b><small id="stMatchSub"></small></div>
     </div>
     <div class="coach" id="coach">Start the mic and sing for a few seconds. Shed will read your pitch and tell you what it notices.</div>
     <div class="row" style="justify-content:flex-end"><button id="resetSession" style="min-height:34px;font-size:13px">Reset session</button></div>
   </section>
 </div>
+<nav class="tabs" id="tabs">
+  <button class="tab on" data-tab="song"><span class="ico">♪</span>Song</button>
+  <button class="tab" data-tab="voice"><span class="ico">◉</span>Voice</button>
+</nav>
 <div class="toast" id="toast"></div>
 
 <script id="dspsrc" type="text/plain">// Shed DSP — phase vocoder time-stretch + resampling pitch shift.
@@ -878,10 +928,38 @@ function analyseSession() {
   const bias = heldFrames ? biasSum / heldFrames : 0;
   const wobble = H ? wobbleSum / H : null;
   const rate = rated ? rateSum / rated : null, depth = rated ? depthSum / rated : null;
+  // --- Runs: segment the line into note events (short plateaus) and the slides between them.
+  // A run is 4+ note events in a row, each under 400 ms, with no gap over 150 ms.
+  const events = []; { let ev = null;
+    for (let i = 0; i < L.length; i++) { const p = L[i]; const n = Math.round(p.midi); const c = (p.midi - n) * 100;
+      if (ev && ev.n === n && p.t - ev.end < 120 && Math.abs(c) <= 35) { ev.end = p.t; ev.cents.push(c); }
+      else { if (ev) events.push(ev); ev = Math.abs(c) <= 35 ? { n, start: p.t, end: p.t, cents: [c], idx: i } : null; } }
+    if (ev) events.push(ev); }
+  // Runs: voiced stretches (no gap over 150 ms) that cover 5+ semitones in under 4 s. Each is scored on
+  // how many distinct notes speak inside it (events), how even they are, and where they land.
+  const runs = []; { let seg = [L[0]];
+    const flush = () => { if (seg.length < 6) return; const ms = seg.map(p => p.midi); const span = Math.max(...ms) - Math.min(...ms); const dur = seg[seg.length - 1].t - seg[0].t;
+      if (span >= 5 && dur >= 300 && dur <= 4000) { const evs = events.filter(e => e.start >= seg[0].t && e.end <= seg[seg.length - 1].t && e.end - e.start < 400 && e.cents.length >= 2 && Math.max(...e.cents) - Math.min(...e.cents) <= 30); runs.push({ seg, evs, dur, span }); } };
+    for (let i = 1; i < L.length; i++) { if (L[i].t - L[i - 1].t < 150) seg.push(L[i]); else { flush(); seg = [L[i]]; } }
+    flush(); }
+  const R = runs.length; let runNotes = 0, runSpan = 0, plateau = 0, runCentred = 0, topUnder = 0, botUnder = 0, runBias = 0, evenSum = 0, evenN = 0;
+  for (const r of runs) {
+    runSpan += r.dur; const evs = r.evs; runNotes += evs.length;
+    plateau += evs.reduce((a2, e) => a2 + (e.end - e.start) + 40, 0);
+    if (evs.length >= 3) { const durs = evs.map(e => e.end - e.start + 40); const mean = durs.reduce((x, y) => x + y, 0) / durs.length; const sd = Math.sqrt(durs.reduce((x, y) => x + (y - mean) ** 2, 0) / durs.length); evenSum += sd / mean; evenN++; }
+    if (evs.length) { const hiN = Math.max(...evs.map(e => e.n)), loN = Math.min(...evs.map(e => e.n));
+      for (const e of evs) { const m = e.cents.reduce((x, y) => x + y, 0) / e.cents.length; runBias += m; if (Math.abs(m) <= 20) runCentred++; if (e.n === hiN && m < -15) topUnder++; if (e.n === loN && m < -15) botUnder++; } }
+  }
+  const runArt = runSpan ? Math.min(1, plateau / runSpan) : null;         // how much of the run is on a note vs sliding
+  const runAcc = runNotes ? runCentred / runNotes : 0;
+  const runEven = evenN ? evenSum / evenN : null;                           // 0 = perfectly even, 0.5 = ragged
+  const runSpeed = runSpan ? runNotes / (runSpan / 1000) : null;
+  const runBiasAvg = runNotes ? runBias / runNotes : 0;
+  const topUnderRate = R ? topUnder / R : 0, botUnderRate = R ? botUnder / R : 0;
   // --- tiles: a word first, the number underneath for the teacher
   $('stRange').textContent = noteName(lo) + ' – ' + noteName(hi);
   $('stRangeSub').textContent = (Math.round(hi) - Math.round(lo)) + ' semitones';
-  if (accuracy == null) { $('stTune').textContent = 'hold a note'; $('stTuneSub').textContent = 'runs are not scored'; }
+  if (accuracy == null) { $('stTune').textContent = 'hold a note'; $('stTuneSub').textContent = 'runs are scored in the Runs tile'; }
   else { $('stTune').textContent = accuracy >= 0.85 ? 'locked in' : accuracy >= 0.65 ? 'mostly there' : accuracy >= 0.45 ? 'settling' : 'searching'; $('stTuneSub').textContent = Math.round(accuracy * 100) + '% of held notes centred (vibrato allowed)'; }
   if (!heldFrames) { $('stBias').textContent = '—'; $('stBiasSub').textContent = ''; }
   else { $('stBias').textContent = Math.abs(bias) < 6 ? 'centred' : Math.abs(bias) < 15 ? (bias < 0 ? 'a touch under' : 'a touch over') : (bias < 0 ? 'under the note' : 'over the note'); $('stBiasSub').textContent = (bias >= 0 ? '+' : '') + bias.toFixed(0) + '¢ on average'; }
@@ -891,6 +969,11 @@ function analyseSession() {
   else if (wobble < 7) { $('stSteady').textContent = 'steady'; $('stSteadySub').textContent = '±' + wobble.toFixed(0) + '¢'; }
   else if (wobble < 15) { $('stSteady').textContent = 'lively'; $('stSteadySub').textContent = '±' + wobble.toFixed(0) + '¢'; }
   else { $('stSteady').textContent = 'slow wobble'; $('stSteadySub').textContent = (rate ? rate.toFixed(1) + ' Hz · ' : '') + '±' + wobble.toFixed(0) + '¢'; }
+  if (!R) { $('stRuns').textContent = 'sing a run'; $('stRunsSub').textContent = '4+ quick notes in a row'; }
+  else {
+    const word = runArt >= 0.6 && runAcc >= 0.75 && (runEven == null || runEven < 0.4) ? 'clean' : runArt < 0.45 ? 'smeared' : runEven != null && runEven >= 0.45 ? 'uneven' : runAcc < 0.6 ? 'off centre' : 'good';
+    $('stRuns').textContent = word; $('stRunsSub').textContent = R + (R === 1 ? ' run · ' : ' runs · ') + (runNotes ? runSpeed.toFixed(1) + ' notes/s · ' + Math.round(runAcc * 100) + '% of notes centred' : 'no separate notes heard');
+  }
   if (S.ref && S.ref.points.length) {
     const withRef = L.filter(p => p.frac != null); let hit = 0, tot = 0, under = 0;
     for (const p of withRef) { const m = refAt(p.frac); if (m == null) continue; tot++; const d = p.midi - (m + S.semis - S.ref.semis); if (Math.abs(d) <= 0.25) hit++; else if (d < 0) under++; }
@@ -905,6 +988,13 @@ function analyseSession() {
   if (wobble != null && wobble < 7 && H >= 3) good.push('Your sustains are very steady, which means the breath is doing the work.');
   if (rate != null && rate >= 4.5 && rate <= 7.5 && depth >= 20 && depth <= 90) good.push('That is a healthy, even vibrato, around ' + rate.toFixed(1) + ' cycles a second.');
   if (Math.round(hi) - Math.round(lo) >= 19) good.push('You covered more than an octave and a half today.');
+  if (R >= 2 && runArt >= 0.6 && runAcc >= 0.75 && (runEven == null || runEven < 0.4)) good.push('Your runs are clean: every note speaks, at ' + runSpeed.toFixed(1) + ' notes a second.');
+  if (R >= 2 && runArt < 0.45) notes.push(['In the runs the notes blur into a slide; the ear hears the shape but not the steps.', 'Separation comes from the breath pulsing lightly, not the throat. Loop the run at 60% and sing every note staccato on "dih" or "duh", then legato at the same speed, then step the speed up. The Riff trainer does exactly this: it only speeds up when the notes stay separate.']);
+  else if (R >= 2 && runEven != null && runEven >= 0.45) notes.push(['The runs rush in the middle; the note lengths are uneven.', 'Runs are rhythm first. Put the warm-up on 3 or 4 notes per beat with the click, and sing the run as triplets or sixteenths at 70%, accenting the first note of each beat. Speed only after the grid is even.']);
+  else if (R >= 2 && topUnderRate >= 0.5) notes.push(['The top of each run falls short; the highest note lands under.', 'Aim the run at the top: think of the top note as the destination, not the turnaround. Keep the vowel narrow going up and lead with the breath so the last step is already supported before you get there.']);
+  else if (R >= 2 && botUnderRate >= 0.5) notes.push(['The bottom notes of the runs sag.', 'The weight drops on the way down. Keep the same energy and vowel on the lowest note as on the highest; think of the bottom note as sitting on the breath, not falling onto it.']);
+  else if (R >= 2 && runAcc < 0.6 && runBiasAvg <= -12) notes.push(['Runs sit under the notes overall.', 'Flat runs are usually a speed-over-clarity trade. Slow to 60%, sing the run on "nay" with some twang so each note has a centre, then bring the speed back with the vowel kept bright.']);
+  else if (R >= 2 && runAcc < 0.6 && runBiasAvg >= 12) notes.push(['Runs sit over the notes; the centres are pushed sharp.', 'That is pressure, not the ear. Sing the run at half volume on "oo" and let it be lazy; when the centres land at low volume, add the energy back.']);
   if (H >= 3 && scoop / H >= 0.5) notes.push(['You arrive at most held notes from underneath and slide up to them.', 'The ear hears the first 100 ms more than anything after. Hear the pitch before the breath moves, then start the note on a light staccato "ng" or "mm" exactly on centre and open to the vowel without the pitch moving. In Shed: loop one phrase at 75% and watch the first dot of each note land in the green.']);
   if (H >= 3 && sag / H >= 0.5) notes.push(['Long notes lose height toward the end.', 'That is support fading before the note is over, not the ear. Keep the ribs wide through the last beat and think of the note growing slightly, not holding. Try the Sustain exercise in the warm-up: one note, four beats, line stays flat.']);
   if (H >= 3 && rise / H >= 0.5) notes.push(['Held notes creep upward as they go.', 'Usually tension building in the throat or jaw as the air runs out. Release the jaw, soften the tongue root, and let the end of the note be the quietest part.']);
@@ -913,7 +1003,8 @@ function analyseSession() {
   if (wobble != null && wobble >= 15 && !(rate >= 4.5 && rate <= 7.5)) notes.push(['Sustains have a slow, wide wobble rather than a vibrato.', 'A wobble is usually the breath pushing in pulses. Sing a straight tone on "oo" over the loop at a comfortable volume and watch the line go flat; then let a vibrato in on purpose at the end of the note. Control in both directions is the goal, not one or the other.']);
   if (rate != null && rate > 7.5 && depth >= 15) notes.push(['The vibrato is on the fast side.', 'A fast flutter usually comes from the larynx working too hard. Lower the volume, lengthen the exhale, and think of the vibrato as the voice relaxing, not shaking.']);
   if (!notes.length) {
-    if (accuracy == null) notes.push(['Mostly moving lines so far. On runs I read the shape, not the cents.', 'Riffs are judged by whether each note speaks. Loop the run at 75%, sing every note as its own short note, then connect them. Hold one note for three beats somewhere and I will read the sustain for you.']);
+    if (accuracy == null && R) notes.push(['Runs today, and nothing held yet.', 'Finish one run on a held note for three beats and I will read the sustain too; that is where support shows.']);
+    else if (accuracy == null) notes.push(['Mostly moving lines so far, but not a run yet: a quick line across five or more notes.', 'Riffs are judged by whether each note speaks. Loop the run at 75%, sing every note as its own short note, then connect them. Hold one note for three beats somewhere and I will read the sustain for you.']);
     else if (accuracy >= 0.8) notes.push(['Centred and steady. This is where technique becomes music.', 'Raise the bar: take the song up two half steps, or loop the hardest phrase at 110%, and keep the same accuracy. Or record a reference take and sing against the ghost line for phrasing, not just pitch.']);
     else if (accuracy >= 0.6) notes.push(['Held notes are mostly there, with some drift on the longer ones.', 'Pick one held note from the song and loop just that bar. Sing it four times watching the line; aim for the whole note in green, not just the middle.']);
     else notes.push(['Held notes are still searching for the centre.', 'Slow the song to 75% and sing only the long notes, resting on the runs. Hear each note, start it on an "ng", and watch it settle. Accuracy on held notes comes first; speed comes back on its own.']);
@@ -921,7 +1012,7 @@ function analyseSession() {
   const lead = good.length ? '<p><b>' + good[0] + '</b></p>' : '';
   $('coach').innerHTML = lead + notes.slice(0, lead ? 1 : 2).map(([a2, b2]) => '<p><b>' + a2 + '</b></p><p class="why">' + b2 + '</p>').join('');
 }
-$('resetSession').addEventListener('click', () => { sessionLog.length = 0; traceHist.length = 0; sessRange = null; $('stMatch').textContent = '—'; ['stRange','stTune','stBias','stSteady','stMatch'].forEach(id => $(id).textContent = '—'); ['stRangeSub','stTuneSub','stBiasSub','stSteadySub','stMatchSub'].forEach(id => $(id).textContent = ''); $('coach').textContent = 'Session reset. Sing for a few seconds and Shed will read your pitch again.'; drawPiano(); });
+$('resetSession').addEventListener('click', () => { sessionLog.length = 0; traceHist.length = 0; sessRange = null; $('stMatch').textContent = '—'; ['stRange','stTune','stBias','stSteady','stMatch','stRuns'].forEach(id => $(id).textContent = '—'); ['stRangeSub','stTuneSub','stBiasSub','stSteadySub','stMatchSub','stRunsSub'].forEach(id => $(id).textContent = ''); $('coach').textContent = 'Session reset. Sing for a few seconds and Shed will read your pitch again.'; drawPiano(); });
 requestAnimationFrame(monitorTick);
 
 
@@ -1200,9 +1291,21 @@ function warmTick(now) {
 // First touch of the piano: warm the sampler quietly so the key tap sounds real.
 piano.addEventListener('pointerdown', () => { pianoPreload(comfortTop != null ? comfortTop - 6 : 48, comfortTop != null ? comfortTop + 6 : 72, ['10']); }, { once: true });
 
+// ---------- Phone tabs + mini transport ----------
+function setTab(t) { document.body.dataset.tab = t; document.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b.dataset.tab === t)); try { localStorage.setItem('shed.tab', t); } catch (e) {} drawWave(); drawPiano(); }
+document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)));
+{ let t = 'song'; try { t = localStorage.getItem('shed.tab') || 'song'; } catch (e) {} setTab(t); }
+$('play2').addEventListener('click', togglePlay);
+$('loop2').addEventListener('click', toggleLoop);
+function syncMini() {
+  $('play2').textContent = S.playing ? 'Pause' : 'Play'; $('play2').disabled = !S.src; $('loop2').disabled = !(S.loopA != null && S.loopB != null);
+  $('loop2').classList.toggle('on', S.loop && S.loopA != null && S.loopB != null);
+  $('miniSong').textContent = S.src ? (S.name.replace(/\.[^.]+$/, '') + (S.semis ? ' · ' + (S.semis > 0 ? '+' : '') + S.semis : '') + (S.tempo !== 1 ? ' · ' + Math.round(S.tempo * 100) + '%' : '')) : 'No song loaded';
+}
 // ---------- UI loop ----------
 function uiTick() {
-  if (S.outLen) { $('tcur').textContent = fmt(S.pos / S.sr); if (S.playing) drawWave(); }
+  if (S.outLen) { const tt = fmt(S.pos / S.sr); $('tcur').textContent = tt; $('tcur2').textContent = tt; if (S.playing && document.body.dataset.tab !== 'voice') drawWave(); }
+  syncMini();
   requestAnimationFrame(uiTick);
 }
 requestAnimationFrame(uiTick);
