@@ -71,6 +71,7 @@ canvas.piano{width:100%;height:64px;display:block;border-radius:8px;background:v
 .stat{background:var(--panel2);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:4px;min-width:0}
 .stat .k{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
 .stat b{font-family:var(--display);font-size:20px;font-weight:700;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stat small{font-family:var(--mono);font-size:11px;color:var(--muted);min-height:14px}
 .recent{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .recent .lbl{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-right:4px}
 .recent button{min-height:30px;padding:4px 10px;font-size:13px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -163,12 +164,25 @@ kbd{font-family:var(--mono);background:var(--panel2);border:1px solid var(--line
       <div class="warmhead"><b id="warmTitle">Warm-up</b> <span class="hint" id="warmInfo">Listen to the piano, then sing it back on the click. Each clean pass moves up a half step.</span></div>
       <div class="warmctl">
         <label class="inline">Exercise <select id="wuPattern">
-          <option value="five">Five-tone 1·2·3·4·5·4·3·2·1</option>
-          <option value="arp">Arpeggio 1·3·5·8·5·3·1</option>
-          <option value="nine">Ninth 1·3·5·8·10·8·5·3·1</option>
-          <option value="down">Descending 5·4·3·2·1</option>
-          <option value="oct">Octave slide 1·8·1</option>
+          <optgroup label="Foundations">
+            <option value="five">Five-tone 1·2·3·4·5·4·3·2·1</option>
+            <option value="arp">Arpeggio 1·3·5·8·5·3·1</option>
+            <option value="nine">Ninth 1·3·5·8·10·8·5·3·1</option>
+            <option value="sustain">Sustain · one note, four beats</option>
+            <option value="oct">Octave slide 1·8·1</option>
+          </optgroup>
+          <optgroup label="Pentatonic &amp; riffs">
+            <option value="pmaj">Major pentatonic, octave up and down</option>
+            <option value="pmin">Minor pentatonic, octave up and down</option>
+            <option value="pmin15">Minor pentatonic, octave and a half</option>
+            <option value="gospel">Gospel turn 8·♭7·5·4·♭3·1</option>
+            <option value="rnbrun">R&amp;B descending run from the 9th</option>
+            <option value="seq3">Pentatonic sequence in threes</option>
+            <option value="blues">Blues scale with the ♭5</option>
+            <option value="dorian">Dorian run 1·2·♭3·5·6·8</option>
+          </optgroup>
         </select></label>
+        <label class="inline">Notes per beat <select id="wuDiv"><option value="1">1</option><option value="2">2</option><option value="3">3 (triplets)</option><option value="4">4</option></select></label>
         <label class="inline">Tempo <input type="number" id="wuBpm" value="100" min="50" max="200" step="2"> bpm</label>
         <label class="inline">Direction <select id="wuDir"><option value="1">up</option><option value="-1">down</option></select></label>
         <button id="wuClick" class="on" title="Metronome click while you sing">Click on</button>
@@ -187,11 +201,11 @@ kbd{font-family:var(--mono);background:var(--panel2);border:1px solid var(--line
     <canvas class="piano" id="piano" height="64" aria-label="88-key piano showing the note you are singing; tap a key to mark your comfortable top note"></canvas>
     <div class="hint" id="keyfind">Tap the piano on your comfortable top note. With a reference take, Shed will suggest the key.</div>
     <div class="session">
-      <div class="stat"><span class="k">Range this session</span><b id="stRange">—</b></div>
-      <div class="stat"><span class="k">In tune</span><b id="stTune">—</b></div>
-      <div class="stat"><span class="k">Tendency</span><b id="stBias">—</b></div>
-      <div class="stat"><span class="k">Sustain steadiness</span><b id="stSteady">—</b></div>
-      <div class="stat" id="stMatchBox" hidden><span class="k">Match to reference</span><b id="stMatch">—</b></div>
+      <div class="stat"><span class="k">Range today</span><b id="stRange">—</b><small id="stRangeSub"></small></div>
+      <div class="stat"><span class="k">Centre on held notes</span><b id="stTune">—</b><small id="stTuneSub"></small></div>
+      <div class="stat"><span class="k">Where you sit</span><b id="stBias">—</b><small id="stBiasSub"></small></div>
+      <div class="stat"><span class="k">Sustain</span><b id="stSteady">—</b><small id="stSteadySub"></small></div>
+      <div class="stat" id="stMatchBox" hidden><span class="k">With the reference</span><b id="stMatch">—</b><small id="stMatchSub"></small></div>
     </div>
     <div class="coach" id="coach">Start the mic and sing for a few seconds. Shed will read your pitch and tell you what it notices.</div>
     <div class="row" style="justify-content:flex-end"><button id="resetSession" style="min-height:34px;font-size:13px">Reset session</button></div>
@@ -704,52 +718,78 @@ function drawPiano() {
 function pct(arr, q) { const a = arr.slice().sort((x, y) => x - y); return a[Math.min(a.length - 1, Math.floor(q * a.length))]; }
 function noteName(m) { return NOTE_NAMES[((Math.round(m) % 12) + 12) % 12] + (Math.floor(Math.round(m) / 12) - 1); }
 function analyseSession() {
-  const L = sessionLog; if (L.length < 25) return;
-  const cents = L.map(p => (p.midi - Math.round(p.midi)) * 100);
-  const inTune = cents.filter(c => Math.abs(c) <= 10).length / cents.length;
-  const bias = cents.reduce((a, b) => a + b, 0) / cents.length;
-  const lo = pct(L.map(p => p.midi), 0.03), hi = pct(L.map(p => p.midi), 0.97);
+  const L = sessionLog; if (L.length < 60) return;                      // ~2.5 s of voice before saying anything
+  const midis = L.map(p => p.midi);
+  const lo = pct(midis, 0.03), hi = pct(midis, 0.97);
   sessRange = [Math.round(lo), Math.round(hi)];
-  // sustained notes: runs of the same nearest note lasting >= 500 ms
-  const holds = []; let run = [L[0]];
-  for (let i = 1; i < L.length; i++) { const p = L[i], q = run[run.length - 1]; if (Math.round(p.midi) === Math.round(q.midi) && p.t - q.t < 120) run.push(p); else { if (run[run.length - 1].t - run[0].t >= 500) holds.push(run); run = [p]; } }
-  if (run[run.length - 1].t - run[0].t >= 500) holds.push(run);
-  let wobble = null, scoop = 0, sag = 0, flatHold = 0;
-  if (holds.length) {
-    let w = 0;
-    for (const h of holds) {
-      const c = h.map(p => (p.midi - Math.round(p.midi)) * 100);
-      const mid = c.slice(Math.floor(c.length * 0.3), Math.ceil(c.length * 0.7)); const midMean = mid.reduce((a, b) => a + b, 0) / mid.length;
-      const sd = Math.sqrt(mid.reduce((a, b) => a + (b - midMean) ** 2, 0) / mid.length); w += sd;
-      const head = c.slice(0, Math.max(2, Math.floor(c.length * 0.15))); const headMean = head.reduce((a, b) => a + b, 0) / head.length;
-      const tail = c.slice(-Math.max(2, Math.floor(c.length * 0.15))); const tailMean = tail.reduce((a, b) => a + b, 0) / tail.length;
-      if (headMean < midMean - 18) scoop++;
-      if (tailMean < midMean - 14) sag++;
-      if (midMean < -12) flatHold++;
-    }
-    wobble = w / holds.length;
+  // Held notes: same nearest note for 500 ms or more. Only these are judged for cents; runs are not.
+  const holds = []; let run = [L[0]]; let runStart = 0;
+  for (let i = 1; i < L.length; i++) { const p = L[i], q = run[run.length - 1]; if (Math.round(p.midi) === Math.round(q.midi) && p.t - q.t < 120) run.push(p); else { if (run[run.length - 1].t - run[0].t >= 500) { run.startIndex = runStart; holds.push(run); } run = [p]; runStart = i; } }
+  if (run[run.length - 1].t - run[0].t >= 500) { run.startIndex = runStart; holds.push(run); }
+  const H = holds.length;
+  let centred = 0, heldFrames = 0, biasSum = 0, scoop = 0, sag = 0, rise = 0, wobbleSum = 0, rateSum = 0, rated = 0, depthSum = 0;
+  for (const h of holds) {
+    const c = h.map(p => (p.midi - Math.round(p.midi)) * 100);
+    const mid = c.slice(Math.floor(c.length * 0.3), Math.ceil(c.length * 0.7)); const midMean = mid.reduce((x, y) => x + y, 0) / mid.length;
+    heldFrames += mid.length; if (Math.abs(midMean) <= 12) centred += mid.length; biasSum += midMean * mid.length;
+    const sd = Math.sqrt(mid.reduce((x, y) => x + (y - midMean) ** 2, 0) / mid.length); wobbleSum += sd;
+    const head = c.slice(0, Math.max(2, Math.floor(c.length * 0.15))); const headMean = head.reduce((x, y) => x + y, 0) / head.length;
+    const tail = c.slice(-Math.max(2, Math.floor(c.length * 0.15))); const tailMean = tail.reduce((x, y) => x + y, 0) / tail.length;
+    let approach = false; { const si = h.startIndex || 0; const target = Math.round(h[0].midi); let k = si - 1, cnt = 0, below = 0; while (k >= 0 && cnt < 6 && h[0].t - L[k].t < 260) { cnt++; if (L[k].midi < target - 0.18 && L[k].midi > target - 2.5) below++; k--; } approach = cnt >= 2 && below >= 2; }
+    if (headMean < midMean - 18 || approach) scoop++;
+    if (tailMean < midMean - 14) sag++;
+    if (tailMean > midMean + 14) rise++;
+    // oscillation rate of the deviation (vibrato vs wobble vs tremolo)
+    if (h.length > 14) { let z = 0; for (let i = 1; i < mid.length; i++) if ((mid[i - 1] - midMean) * (mid[i] - midMean) < 0) z++; const secs = (h[Math.ceil(c.length * 0.7) - 1].t - h[Math.floor(c.length * 0.3)].t) / 1000; if (secs > 0.25) { rateSum += z / 2 / secs; depthSum += sd * 1.4; rated++; } }
   }
+  const accuracy = heldFrames ? centred / heldFrames : null;
+  const bias = heldFrames ? biasSum / heldFrames : 0;
+  const wobble = H ? wobbleSum / H : null;
+  const rate = rated ? rateSum / rated : null, depth = rated ? depthSum / rated : null;
+  // --- tiles: a word first, the number underneath for the teacher
   $('stRange').textContent = noteName(lo) + ' – ' + noteName(hi);
-  $('stTune').textContent = Math.round(inTune * 100) + '%';
-  $('stBias').textContent = Math.abs(bias) < 5 ? 'centred' : (bias < 0 ? 'flat ' : 'sharp ') + Math.abs(bias).toFixed(0) + '¢';
-  $('stSteady').textContent = wobble == null ? 'hold a note…' : wobble < 7 ? 'steady' : wobble < 15 ? 'slight wobble' : 'wide wobble';
-  if (S.ref && S.ref.points.length) { const withRef = L.filter(p => p.frac != null); let hit = 0, tot = 0; for (const p of withRef) { const m = refAt(p.frac); if (m == null) continue; tot++; if (Math.abs(p.midi - (m + S.semis - S.ref.semis)) <= 0.25) hit++; } $('stMatchBox').hidden = false; $('stMatch').textContent = tot ? Math.round(100 * hit / tot) + '%' : '—'; }
-  // observations
-  const notes = [];
-  const n = holds.length;
-  if (n >= 3 && scoop / n >= 0.5) notes.push(['You approach most sustained notes from below and slide up into them.', 'Hear the note before you sing it. Practise clean onsets: short staccato "ng" or "mm" on the target pitch, then open to the vowel without moving.']);
-  if (n >= 3 && sag / n >= 0.5) notes.push(['Pitch drops toward the end of long notes.', 'That is usually breath support fading. Think of a slight crescendo through the last beat and keep the ribs open; watch the line stay flat on the trace.']);
-  if (bias <= -8) notes.push(['Overall you sit about ' + Math.abs(bias).toFixed(0) + ' cents flat.', 'Common causes: a dark, heavy vowel or low energy. Brighten the vowel slightly, lift the soft palate, and try the same phrase at 90% speed on a lip trill first.']);
-  else if (bias >= 8) notes.push(['Overall you sit about ' + bias.toFixed(0) + ' cents sharp.', 'Usually pushing or tension. Lighten the airflow, drop the jaw and shoulders, and sing the phrase at half volume to find the centre.']);
-  if (wobble != null && wobble >= 15) notes.push(['Sustained notes have a wide wobble.', 'Practise straight tone on "oo" over the loop, then let a slow, even vibrato return on purpose. The goal is control in both directions.']);
-  if (!notes.length) {
-    if (inTune >= 0.8) notes.push(['Centred and steady. Nice.', 'Raise the bar: loop the hardest phrase at 110% speed, or take the key up two half steps and keep the same accuracy.']);
-    else if (inTune >= 0.6) notes.push(['Mostly centred, with some drift on the moving lines.', 'Slow the loop to 75% and sing each note of the run as its own short note before connecting them.']);
-    else notes.push(['The line is moving a lot. That is normal on runs and riffs; it tells us less on fast passages.', 'Hold one note for three seconds and watch it. Then sing a slow scale, one note per second, and aim for all green.']);
+  $('stRangeSub').textContent = (Math.round(hi) - Math.round(lo)) + ' semitones';
+  if (accuracy == null) { $('stTune').textContent = 'hold a note'; $('stTuneSub').textContent = 'runs are not scored'; }
+  else { $('stTune').textContent = accuracy >= 0.85 ? 'locked in' : accuracy >= 0.65 ? 'mostly there' : accuracy >= 0.45 ? 'settling' : 'searching'; $('stTuneSub').textContent = Math.round(accuracy * 100) + '% of held notes centred (vibrato allowed)'; }
+  if (!heldFrames) { $('stBias').textContent = '—'; $('stBiasSub').textContent = ''; }
+  else { $('stBias').textContent = Math.abs(bias) < 6 ? 'centred' : Math.abs(bias) < 15 ? (bias < 0 ? 'a touch under' : 'a touch over') : (bias < 0 ? 'under the note' : 'over the note'); $('stBiasSub').textContent = (bias >= 0 ? '+' : '') + bias.toFixed(0) + '¢ on average'; }
+  if (wobble == null) { $('stSteady').textContent = 'hold a note'; $('stSteadySub').textContent = ''; }
+  else if (rate != null && rate >= 4.5 && rate <= 7.5 && depth >= 20 && depth <= 90) { $('stSteady').textContent = 'vibrato'; $('stSteadySub').textContent = rate.toFixed(1) + ' Hz · ±' + depth.toFixed(0) + '¢'; }
+  else if (rate != null && rate > 7.5 && depth >= 15) { $('stSteady').textContent = 'fast tremolo'; $('stSteadySub').textContent = rate.toFixed(1) + ' Hz'; }
+  else if (wobble < 7) { $('stSteady').textContent = 'steady'; $('stSteadySub').textContent = '±' + wobble.toFixed(0) + '¢'; }
+  else if (wobble < 15) { $('stSteady').textContent = 'lively'; $('stSteadySub').textContent = '±' + wobble.toFixed(0) + '¢'; }
+  else { $('stSteady').textContent = 'slow wobble'; $('stSteadySub').textContent = (rate ? rate.toFixed(1) + ' Hz · ' : '') + '±' + wobble.toFixed(0) + '¢'; }
+  if (S.ref && S.ref.points.length) {
+    const withRef = L.filter(p => p.frac != null); let hit = 0, tot = 0, under = 0;
+    for (const p of withRef) { const m = refAt(p.frac); if (m == null) continue; tot++; const d = p.midi - (m + S.semis - S.ref.semis); if (Math.abs(d) <= 0.25) hit++; else if (d < 0) under++; }
+    $('stMatchBox').hidden = false;
+    if (!tot) { $('stMatch').textContent = '—'; $('stMatchSub').textContent = 'play the song and sing'; }
+    else { const r = hit / tot; $('stMatch').textContent = r >= 0.8 ? 'on the line' : r >= 0.6 ? 'close' : r >= 0.4 ? 'drifting' : 'off the line'; $('stMatchSub').textContent = Math.round(r * 100) + '% within a quarter tone' + (tot - hit > 0 ? (under / (tot - hit) > 0.65 ? ', mostly under' : under / (tot - hit) < 0.35 ? ', mostly over' : '') : ''); }
   }
-  $('coach').innerHTML = notes.slice(0, 2).map(([a, b]) => '<p><b>' + a + '</b></p><p class="why">' + b + '</p>').join('');
+  // --- the coach: one thing that is working, one thing to work on, one concrete way to do it in Shed
+  const notes = [];
+  const good = [];
+  if (accuracy != null && accuracy >= 0.85) good.push('Held notes are landing dead centre.');
+  if (wobble != null && wobble < 7 && H >= 3) good.push('Your sustains are very steady, which means the breath is doing the work.');
+  if (rate != null && rate >= 4.5 && rate <= 7.5 && depth >= 20 && depth <= 90) good.push('That is a healthy, even vibrato, around ' + rate.toFixed(1) + ' cycles a second.');
+  if (Math.round(hi) - Math.round(lo) >= 19) good.push('You covered more than an octave and a half today.');
+  if (H >= 3 && scoop / H >= 0.5) notes.push(['You arrive at most held notes from underneath and slide up to them.', 'The ear hears the first 100 ms more than anything after. Hear the pitch before the breath moves, then start the note on a light staccato "ng" or "mm" exactly on centre and open to the vowel without the pitch moving. In Shed: loop one phrase at 75% and watch the first dot of each note land in the green.']);
+  if (H >= 3 && sag / H >= 0.5) notes.push(['Long notes lose height toward the end.', 'That is support fading before the note is over, not the ear. Keep the ribs wide through the last beat and think of the note growing slightly, not holding. Try the Sustain exercise in the warm-up: one note, four beats, line stays flat.']);
+  if (H >= 3 && rise / H >= 0.5) notes.push(['Held notes creep upward as they go.', 'Usually tension building in the throat or jaw as the air runs out. Release the jaw, soften the tongue root, and let the end of the note be the quietest part.']);
+  if (heldFrames && bias <= -10) notes.push(['Held notes sit about ' + Math.abs(bias).toFixed(0) + ' cents under centre.', 'Flat is almost always a brightness and energy issue, not a hearing issue. Narrow the vowel a little (think "ee" inside the "ah"), add a touch of twang, and keep the airflow moving. Sing the same phrase on a lip trill first, then on the words; the trill forces the airflow the vowel was missing.']);
+  else if (heldFrames && bias >= 10) notes.push(['Held notes sit about ' + bias.toFixed(0) + ' cents over centre.', 'Sharp usually means pressing: too much air pressure under the fold, or lifting the larynx on the way up. Drop the volume by half, let the larynx sit, and sing the phrase on "oo". If the line lands in the green at half volume, the pitch was never the problem; the pressure was.']);
+  if (wobble != null && wobble >= 15 && !(rate >= 4.5 && rate <= 7.5)) notes.push(['Sustains have a slow, wide wobble rather than a vibrato.', 'A wobble is usually the breath pushing in pulses. Sing a straight tone on "oo" over the loop at a comfortable volume and watch the line go flat; then let a vibrato in on purpose at the end of the note. Control in both directions is the goal, not one or the other.']);
+  if (rate != null && rate > 7.5 && depth >= 15) notes.push(['The vibrato is on the fast side.', 'A fast flutter usually comes from the larynx working too hard. Lower the volume, lengthen the exhale, and think of the vibrato as the voice relaxing, not shaking.']);
+  if (!notes.length) {
+    if (accuracy == null) notes.push(['Mostly moving lines so far. On runs I read the shape, not the cents.', 'Riffs are judged by whether each note speaks. Loop the run at 75%, sing every note as its own short note, then connect them. Hold one note for three beats somewhere and I will read the sustain for you.']);
+    else if (accuracy >= 0.8) notes.push(['Centred and steady. This is where technique becomes music.', 'Raise the bar: take the song up two half steps, or loop the hardest phrase at 110%, and keep the same accuracy. Or record a reference take and sing against the ghost line for phrasing, not just pitch.']);
+    else if (accuracy >= 0.6) notes.push(['Held notes are mostly there, with some drift on the longer ones.', 'Pick one held note from the song and loop just that bar. Sing it four times watching the line; aim for the whole note in green, not just the middle.']);
+    else notes.push(['Held notes are still searching for the centre.', 'Slow the song to 75% and sing only the long notes, resting on the runs. Hear each note, start it on an "ng", and watch it settle. Accuracy on held notes comes first; speed comes back on its own.']);
+  }
+  const lead = good.length ? '<p><b>' + good[0] + '</b></p>' : '';
+  $('coach').innerHTML = lead + notes.slice(0, lead ? 1 : 2).map(([a2, b2]) => '<p><b>' + a2 + '</b></p><p class="why">' + b2 + '</p>').join('');
 }
-$('resetSession').addEventListener('click', () => { sessionLog.length = 0; traceHist.length = 0; sessRange = null; $('stMatch').textContent = '—'; ['stRange','stTune','stBias','stSteady'].forEach(id => $(id).textContent = '—'); $('coach').textContent = 'Session reset. Sing for a few seconds and Shed will read your pitch again.'; drawPiano(); });
+$('resetSession').addEventListener('click', () => { sessionLog.length = 0; traceHist.length = 0; sessRange = null; $('stMatch').textContent = '—'; ['stRange','stTune','stBias','stSteady','stMatch'].forEach(id => $(id).textContent = '—'); ['stRangeSub','stTuneSub','stBiasSub','stSteadySub','stMatchSub'].forEach(id => $(id).textContent = ''); $('coach').textContent = 'Session reset. Sing for a few seconds and Shed will read your pitch again.'; drawPiano(); });
 requestAnimationFrame(monitorTick);
 
 
@@ -937,7 +977,7 @@ function synthTone(midi, dur, t0, vel = 0.6) {
   g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(a, t0 + 0.015); g.gain.exponentialRampToValueAtTime(a * 0.35, t0 + dur * 0.6); g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
   o1.start(t0); o2.start(t0); o1.stop(t0 + dur + 0.05); o2.stop(t0 + dur + 0.05);
 }
-function playChord(root, when, dur) { [0, 4, 7, 12].forEach((iv, i) => playTone(root + iv, dur, when + i * 0.012, 0.5)); }
+function playChord(root, when, dur, chord = MAJ) { chord.forEach((iv, i) => playTone(root + iv, dur, when + i * 0.012, 0.5)); }
 // Metronome click: a short tuned tick, brighter on the downbeat.
 function click(when, down) {
   const o = ctx.createOscillator(), g = ctx.createGain(), n = ctx.createBufferSource();
@@ -947,8 +987,23 @@ function click(when, down) {
 }
 
 // ---------- Warm-up: real piano, click, your range ----------
-const PATTERNS = { five: [0, 2, 4, 5, 7, 5, 4, 2, 0], arp: [0, 4, 7, 12, 7, 4, 0], nine: [0, 4, 7, 12, 14, 12, 7, 4, 0], down: [7, 5, 4, 2, 0], oct: [0, 12, 0] };
-const WU = { on: false, start: 55, pass: 0, phase: 'idle', phaseEnd: 0, passStart: 0, beat: 0.6, pattern: PATTERNS.five, dir: 1, clickOn: true, chordOn: true, guideOn: false };
+const MAJ = [0, 4, 7, 12], MIN = [0, 3, 7, 12], DOM = [0, 4, 7, 10];
+const PATTERNS = {
+  five:   { steps: [0, 2, 4, 5, 7, 5, 4, 2, 0], chord: MAJ },
+  arp:    { steps: [0, 4, 7, 12, 7, 4, 0], chord: MAJ },
+  nine:   { steps: [0, 4, 7, 12, 14, 12, 7, 4, 0], chord: MAJ },
+  sustain:{ steps: [0], chord: MAJ, hold: 4 },
+  oct:    { steps: [0, 12, 0], chord: MAJ },
+  pmaj:   { steps: [0, 2, 4, 7, 9, 12, 9, 7, 4, 2, 0], chord: MAJ },
+  pmin:   { steps: [0, 3, 5, 7, 10, 12, 10, 7, 5, 3, 0], chord: MIN },
+  pmin15: { steps: [0, 3, 5, 7, 10, 12, 15, 17, 19, 17, 15, 12, 10, 7, 5, 3, 0], chord: MIN },
+  gospel: { steps: [12, 10, 7, 5, 3, 0], chord: MIN },
+  rnbrun: { steps: [14, 12, 10, 7, 5, 3, 0], chord: MIN },
+  seq3:   { steps: [0, 3, 5, 3, 5, 7, 5, 7, 10, 7, 10, 12, 10, 7, 5, 3, 0], chord: MIN },
+  blues:  { steps: [0, 3, 5, 6, 7, 10, 12, 10, 7, 6, 5, 3, 0], chord: DOM },
+  dorian: { steps: [0, 2, 3, 7, 9, 12, 9, 7, 3, 2, 0], chord: MIN },
+};
+const WU = { on: false, start: 55, pass: 0, phase: 'idle', phaseEnd: 0, passStart: 0, beat: 0.6, pattern: PATTERNS.five.steps, chord: MAJ, hold: 0, div: 1, dir: 1, clickOn: true, chordOn: true, guideOn: false };
 $('wuClick').addEventListener('click', () => { WU.clickOn = !WU.clickOn; $('wuClick').classList.toggle('on', WU.clickOn); $('wuClick').textContent = WU.clickOn ? 'Click on' : 'Click off'; });
 $('wuChord').addEventListener('click', () => { WU.chordOn = !WU.chordOn; $('wuChord').classList.toggle('on', WU.chordOn); $('wuChord').textContent = WU.chordOn ? 'Chord cue on' : 'Chord cue off'; });
 $('wuGuide').addEventListener('click', () => { WU.guideOn = !WU.guideOn; $('wuGuide').classList.toggle('on', WU.guideOn); $('wuGuide').textContent = WU.guideOn ? 'Piano under voice on' : 'Piano under voice off'; });
@@ -967,23 +1022,27 @@ $('warm').addEventListener('click', async () => {
 function stopWarm() { WU.on = false; WU.phase = 'idle'; $('warmPanel').hidden = true; $('warm').classList.remove('on'); $('warm').textContent = 'Warm-up'; }
 $('warmStop').addEventListener('click', stopWarm);
 function readWarmSettings() {
-  WU.pattern = PATTERNS[$('wuPattern').value] || PATTERNS.five; WU.dir = +$('wuDir').value || 1;
+  const def = PATTERNS[$('wuPattern').value] || PATTERNS.five; WU.pattern = def.steps; WU.chord = def.chord; WU.hold = def.hold || 0; WU.div = +$('wuDiv').value || 1; WU.dir = +$('wuDir').value || 1;
   WU.beat = 60 / Math.max(50, Math.min(200, +$('wuBpm').value || 100));
 }
 function nextWarmPass() {
   readWarmSettings(); WU.pass++;
-  const P = WU.pattern, b = WU.beat, t0 = ctx.currentTime + 0.15;
+  const P = WU.pattern, b = WU.beat, n = WU.hold ? b * WU.hold : b / WU.div, t0 = ctx.currentTime + 0.15;
+  const top = Math.max(...P);
   let t = t0;
-  if (WU.chordOn) { playChord(WU.start, t, b * 1.6); t += b * 2; }
-  P.forEach((st, i) => { if (WU.clickOn) click(t + i * b, i === 0); playTone(WU.start + st, b * 0.92, t + i * b, i === 0 || i === P.length - 1 ? 0.7 : 0.55); });
-  const listenEnd = t + P.length * b;
-  // one beat of rest, then the singer's pass on the click (optionally with a soft piano guide)
+  if (WU.chordOn) { playChord(WU.start, t, b * 1.6, WU.chord); t += b * 2; }
+  const lenBeats = WU.hold ? WU.hold : Math.ceil(P.length / WU.div);
+  // piano phrasing: lean into the top note, taper on the way down, like an accompanist
+  P.forEach((st, i) => { const vel = st === top ? 0.8 : i === 0 ? 0.65 : i > P.indexOf(top) ? 0.45 : 0.55; playTone(WU.start + st, n * 0.92, t + i * n, vel); });
+  if (WU.clickOn) for (let i = 0; i < lenBeats; i++) click(t + i * b, i === 0);
+  const listenEnd = t + lenBeats * b;
   const singStart = listenEnd + b;
-  if (WU.clickOn) for (let i = -1; i < P.length; i++) click(singStart + i * b, i === 0);
-  if (WU.guideOn) P.forEach((st, i) => playTone(WU.start + st, b * 0.9, singStart + i * b, 0.3));
-  WU.phase = 'listen'; WU.singStartAt = performance.now() + (singStart - ctx.currentTime) * 1000; WU.phaseEnd = WU.singStartAt + (P.length * b + 0.4) * 1000;
-  pianoPreload(WU.start + WU.dir * 1 - 1, WU.start + WU.dir * 1 + 15, ['10', '06']);
-  $('warmTitle').textContent = 'Pass ' + WU.pass + ' · ' + noteName(WU.start) + ' major'; $('warmInfo').textContent = 'Listen… then sing: ' + P.map(st => noteName(WU.start + st)).join(' ');
+  if (WU.clickOn) for (let i = -1; i < lenBeats; i++) click(singStart + i * b, i === 0);
+  if (WU.guideOn) P.forEach((st, i) => playTone(WU.start + st, n * 0.9, singStart + i * n, 0.3));
+  WU.phase = 'listen'; WU.singStartAt = performance.now() + (singStart - ctx.currentTime) * 1000; WU.phaseEnd = WU.singStartAt + (lenBeats * b + 0.4) * 1000;
+  pianoPreload(WU.start + WU.dir - 1, WU.start + WU.dir + top + 1, ['10', '06', '14']);
+  const quality = WU.chord === MIN ? ' minor' : WU.chord === DOM ? ' dominant' : ' major';
+  $('warmTitle').textContent = 'Pass ' + WU.pass + ' · ' + noteName(WU.start) + quality; $('warmInfo').textContent = 'Listen… then sing: ' + P.map(st => noteName(WU.start + st)).join(' ');
 }
 function warmTick(now) {
   if (!WU.on) return;
@@ -996,7 +1055,7 @@ function warmTick(now) {
       const targets = WU.pattern.map(st => WU.start + st);
       const hit = pts.filter(p => targets.some(t => Math.abs(p.midi - t) <= 0.25)).length / pts.length;
       const bias = pts.reduce((a, p) => a + (p.midi - Math.round(p.midi)) * 100, 0) / pts.length;
-      msg = Math.round(hit * 100) + '% on the notes' + (Math.abs(bias) > 8 ? (bias < 0 ? ', leaning flat' : ', leaning sharp') : '') + '.';
+      msg = (hit >= 0.8 ? 'Clean.' : hit >= 0.6 ? 'Most notes landed.' : hit >= 0.35 ? 'The shape was there; the centres were not.' : 'Hard to find the centres on that one.') + (Math.abs(bias) > 8 ? (bias < 0 ? ' You lean under; think brighter.' : ' You lean over; ease the pressure.') : '');
       if (hit >= 0.6) { WU.start += WU.dir; msg += WU.dir > 0 ? ' Up a half step.' : ' Down a half step.'; } else msg += ' Same key again.';
       const top = WU.start + Math.max(...WU.pattern);
       if (comfortTop != null && WU.dir > 0 && top > comfortTop + 2) { msg += ' That is your top for today.'; $('warmInfo').textContent = msg; stopWarm(); return; }
