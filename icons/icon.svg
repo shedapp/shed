@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#171a24"/><stop offset="1" stop-color="#0b0d12"/></linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffd27a"/><stop offset="1" stop-color="#e9a62e"/></linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="228" fill="url(#bg)"/>
+  <!-- faint key rows, like the trace -->
+  <g stroke="#ffffff" stroke-opacity="0.045" stroke-width="2">
+    <line x1="0" y1="352" x2="1024" y2="352"/><line x1="0" y1="432" x2="1024" y2="432"/><line x1="0" y1="512" x2="1024" y2="512"/><line x1="0" y1="592" x2="1024" y2="592"/><line x1="0" y1="672" x2="1024" y2="672"/>
+  </g>
+  <!-- the pitch line: searching, then landing dead on the note -->
+  <path d="M150 640 C 230 640, 260 470, 340 470 S 430 600, 500 592 S 600 512, 690 512 L 880 512" fill="none" stroke="url(#gold)" stroke-width="54" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- the dot of "Shed." -->
+  <circle cx="880" cy="512" r="56" fill="#f2b544"/>
+  <circle cx="880" cy="512" r="22" fill="#1a1200"/>
+</svg>
