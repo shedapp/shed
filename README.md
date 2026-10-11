@@ -16,5 +16,6 @@ Install on a phone: open the link, then iPhone → Share → *Add to Home Screen
 - `src/dsp.js` – the audio engine: phase-vocoder time stretch + pitch shift, run in a Web Worker
 - `src/build.js` – inlines the engine into the page and writes `index.html`
 - `src/test_*.js` – automated tests (engine accuracy, browser flows)
+- `piano/` – Salamander Grand Piano samples (CC BY 3.0, see `piano/CREDITS.md`)
 
 Rebuild with `node src/build.js` (output lands in `src/dist/`; copy `shed.html` to `index.html`).

@@ -78,7 +78,11 @@ button.rec{color:var(--warn);border-color:var(--warn)}
 button.rec.live{background:var(--warn);color:#fff;animation:pulse 1s infinite}
 @keyframes pulse{50%{opacity:.6}}
 .session{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}
-.warmpanel{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;background:var(--panel2);border-radius:10px;padding:10px 12px}
+.warmpanel{display:flex;flex-direction:column;gap:10px;background:var(--panel2);border-radius:10px;padding:12px}
+.warmctl{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.warmctl button{min-height:34px;font-size:13px;padding:5px 10px}
+.warmctl select{font:inherit;font-size:13px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:5px 7px;max-width:100%}
+.warmctl label.inline input{width:58px}
 .coach{border-left:3px solid var(--accent);padding:8px 12px;color:var(--fg);font-size:14px;line-height:1.5;background:var(--panel2);border-radius:0 10px 10px 0}
 .coach p{margin:0}.coach p+p{margin-top:6px}
 .coach .why{color:var(--muted)}
@@ -156,8 +160,22 @@ kbd{font-family:var(--mono);background:var(--panel2);border:1px solid var(--line
       <button id="mic">Start mic</button>
     </div>
     <div class="warmpanel" id="warmPanel" hidden>
-      <div><b id="warmTitle">Warm-up</b> <span class="hint" id="warmInfo">Listen, then sing it back. Each pass starts a half step higher.</span></div>
-      <div class="row" style="flex:0 0 auto"><button id="warmStop" style="min-height:34px;font-size:13px">Stop</button></div>
+      <div class="warmhead"><b id="warmTitle">Warm-up</b> <span class="hint" id="warmInfo">Listen to the piano, then sing it back on the click. Each clean pass moves up a half step.</span></div>
+      <div class="warmctl">
+        <label class="inline">Exercise <select id="wuPattern">
+          <option value="five">Five-tone 1·2·3·4·5·4·3·2·1</option>
+          <option value="arp">Arpeggio 1·3·5·8·5·3·1</option>
+          <option value="nine">Ninth 1·3·5·8·10·8·5·3·1</option>
+          <option value="down">Descending 5·4·3·2·1</option>
+          <option value="oct">Octave slide 1·8·1</option>
+        </select></label>
+        <label class="inline">Tempo <input type="number" id="wuBpm" value="100" min="50" max="200" step="2"> bpm</label>
+        <label class="inline">Direction <select id="wuDir"><option value="1">up</option><option value="-1">down</option></select></label>
+        <button id="wuClick" class="on" title="Metronome click while you sing">Click on</button>
+        <button id="wuChord" class="on" title="Hear the tonic chord before each pass">Chord cue on</button>
+        <button id="wuGuide" title="Piano plays softly under your voice">Piano under voice off</button>
+        <button id="warmStop">Stop</button>
+      </div>
     </div>
     <div class="mon">
       <div><div class="note" id="note">—</div><div class="hz" id="hz"></div></div>
@@ -658,7 +676,8 @@ piano.addEventListener('pointerdown', (e) => {
   const r = piano.getBoundingClientRect(); const whites = []; for (let m = 21; m <= 108; m++) if (!isBlack(m)) whites.push(m);
   const i = Math.floor((e.clientX - r.left) / r.width * whites.length); if (i < 0 || i >= whites.length) return;
   comfortTop = whites[i]; try { localStorage.setItem('shed.top', comfortTop); } catch (err) {}
-  playTone(comfortTop, 0.5); drawPiano(); updateRefUI(); toast('Comfortable top note: ' + noteName(comfortTop));
+  ensureCtx(); (async () => { if (await pianoMeta()) await pianoBuffer(nearestSample(comfortTop), '10').catch(() => {}); playTone(comfortTop, 0.9, 0, 0.6); })();
+  drawPiano(); updateRefUI(); toast('Comfortable top note: ' + noteName(comfortTop));
 });
 function drawPiano() {
   const dpr = window.devicePixelRatio || 1, W = piano.clientWidth, H = piano.clientHeight;
@@ -873,16 +892,66 @@ function trainerTick() {
 }
 
 // ---------- Warm-up: five-tone scales that follow your range ----------
-function playTone(midi, dur, when) {
-  ensureCtx(); const t0 = when || ctx.currentTime; const f = 440 * Math.pow(2, (midi - 69) / 12);
+// ---------- Piano: Salamander Grand (Yamaha C5), three dynamic layers, retuned to equal temperament ----------
+const PIANO = { base: 'piano/', meta: null, cache: new Map(), failed: false, notes: [] };
+async function pianoMeta() {
+  if (PIANO.meta || PIANO.failed) return PIANO.meta;
+  try { const r = await fetch(PIANO.base + 'index.json'); if (!r.ok) throw 0; PIANO.meta = await r.json(); PIANO.notes = Object.keys(PIANO.meta).map(Number).sort((a, b) => a - b); }
+  catch (e) { PIANO.failed = true; }
+  return PIANO.meta;
+}
+function nearestSample(midi) { let best = PIANO.notes[0]; for (const n of PIANO.notes) if (Math.abs(n - midi) < Math.abs(best - midi)) best = n; return best; }
+async function pianoBuffer(sampleMidi, layer) {
+  const key = sampleMidi + ':' + layer; if (PIANO.cache.has(key)) return PIANO.cache.get(key);
+  const p = (async () => { const r = await fetch(PIANO.base + PIANO.meta[sampleMidi].layers[layer]); const ab = await r.arrayBuffer(); return await new Promise((res, rej) => ctx.decodeAudioData(ab, res, rej)); })();
+  PIANO.cache.set(key, p); p.catch(() => PIANO.cache.delete(key)); return p;
+}
+// Warm the cache for a range of notes so scheduled passes never wait on the network.
+async function pianoPreload(lo, hi, layers = ['10']) {
+  ensureCtx(); if (!(await pianoMeta())) return false;
+  const need = new Set(); for (let m = lo; m <= hi; m++) need.add(nearestSample(m));
+  await Promise.all([...need].flatMap(n => layers.map(l => pianoBuffer(n, l).catch(() => null))));
+  return true;
+}
+// Play one note. vel 0..1 picks the dynamic layer; dur is the held length, then the damper falls (short release).
+function playTone(midi, dur, when, vel = 0.6) {
+  ensureCtx(); const t0 = when || ctx.currentTime;
+  if (!PIANO.meta || PIANO.failed) return synthTone(midi, dur, t0, vel);
+  const sm = nearestSample(midi), layer = vel < 0.4 ? '06' : vel < 0.75 ? '10' : '14';
+  const key = sm + ':' + layer; const cached = PIANO.cache.get(key);
+  if (!cached) { pianoBuffer(sm, layer).catch(() => {}); return synthTone(midi, dur, t0, vel); }
+  cached.then(buf => {
+    const src = ctx.createBufferSource(); src.buffer = buf;
+    src.playbackRate.value = Math.pow(2, (midi - sm) / 12 + (PIANO.meta[sm].tune || 0) / 1200);
+    const g = ctx.createGain(); const peak = 0.9;
+    g.gain.setValueAtTime(peak, t0); g.gain.setValueAtTime(peak, t0 + dur); g.gain.exponentialRampToValueAtTime(0.001, t0 + dur + 0.35);
+    src.connect(g).connect(ctx.destination); src.start(Math.max(t0, ctx.currentTime)); src.stop(t0 + dur + 0.4);
+  }).catch(() => synthTone(midi, dur, t0, vel));
+}
+function synthTone(midi, dur, t0, vel = 0.6) {
+  const f = 440 * Math.pow(2, (midi - 69) / 12);
   const o1 = ctx.createOscillator(), o2 = ctx.createOscillator(), g = ctx.createGain(), lp = ctx.createBiquadFilter();
   o1.type = 'triangle'; o2.type = 'sine'; o1.frequency.value = f; o2.frequency.value = f * 2; lp.type = 'lowpass'; lp.frequency.value = 2200;
   const g2 = ctx.createGain(); g2.gain.value = 0.25; o2.connect(g2).connect(lp); o1.connect(lp); lp.connect(g).connect(ctx.destination);
-  g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(0.35, t0 + 0.015); g.gain.exponentialRampToValueAtTime(0.12, t0 + dur * 0.6); g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+  const a = 0.2 + 0.25 * vel;
+  g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(a, t0 + 0.015); g.gain.exponentialRampToValueAtTime(a * 0.35, t0 + dur * 0.6); g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
   o1.start(t0); o2.start(t0); o1.stop(t0 + dur + 0.05); o2.stop(t0 + dur + 0.05);
 }
-const WU = { on: false, start: 55, pass: 0, phase: 'idle', phaseEnd: 0, passStart: 0, noteDur: 0.42 };
-const PATTERN = [0, 2, 4, 5, 7, 5, 4, 2, 0];
+function playChord(root, when, dur) { [0, 4, 7, 12].forEach((iv, i) => playTone(root + iv, dur, when + i * 0.012, 0.5)); }
+// Metronome click: a short tuned tick, brighter on the downbeat.
+function click(when, down) {
+  const o = ctx.createOscillator(), g = ctx.createGain(), n = ctx.createBufferSource();
+  o.type = 'sine'; o.frequency.value = down ? 1800 : 1200;
+  g.gain.setValueAtTime(0.0001, when); g.gain.exponentialRampToValueAtTime(down ? 0.5 : 0.32, when + 0.002); g.gain.exponentialRampToValueAtTime(0.0001, when + 0.045);
+  o.connect(g).connect(ctx.destination); o.start(when); o.stop(when + 0.06);
+}
+
+// ---------- Warm-up: real piano, click, your range ----------
+const PATTERNS = { five: [0, 2, 4, 5, 7, 5, 4, 2, 0], arp: [0, 4, 7, 12, 7, 4, 0], nine: [0, 4, 7, 12, 14, 12, 7, 4, 0], down: [7, 5, 4, 2, 0], oct: [0, 12, 0] };
+const WU = { on: false, start: 55, pass: 0, phase: 'idle', phaseEnd: 0, passStart: 0, beat: 0.6, pattern: PATTERNS.five, dir: 1, clickOn: true, chordOn: true, guideOn: false };
+$('wuClick').addEventListener('click', () => { WU.clickOn = !WU.clickOn; $('wuClick').classList.toggle('on', WU.clickOn); $('wuClick').textContent = WU.clickOn ? 'Click on' : 'Click off'; });
+$('wuChord').addEventListener('click', () => { WU.chordOn = !WU.chordOn; $('wuChord').classList.toggle('on', WU.chordOn); $('wuChord').textContent = WU.chordOn ? 'Chord cue on' : 'Chord cue off'; });
+$('wuGuide').addEventListener('click', () => { WU.guideOn = !WU.guideOn; $('wuGuide').classList.toggle('on', WU.guideOn); $('wuGuide').textContent = WU.guideOn ? 'Piano under voice on' : 'Piano under voice off'; });
 $('warm').addEventListener('click', async () => {
   if (WU.on) { stopWarm(); return; }
   if (!(await startMic())) return;
@@ -890,35 +959,55 @@ $('warm').addEventListener('click', async () => {
   const vals = sessionLog.map(p => p.midi);
   WU.start = vals.length > 50 ? Math.round(pct(vals, 0.1)) : (comfortTop != null ? comfortTop - 12 : 55);
   WU.on = true; WU.pass = 0; $('warmPanel').hidden = false; $('warm').classList.add('on'); $('warm').textContent = 'Stop warm-up';
-  nextWarmPass();
+  $('warmTitle').textContent = 'Loading piano…'; $('warmInfo').textContent = 'Salamander concert grand, first time only.';
+  const ok = await pianoPreload(WU.start - 2, WU.start + 26, ['10', '06']);
+  if (!ok) toast('Piano samples could not load; using a simple tone for now.');
+  if (WU.on) nextWarmPass();
 });
 function stopWarm() { WU.on = false; WU.phase = 'idle'; $('warmPanel').hidden = true; $('warm').classList.remove('on'); $('warm').textContent = 'Warm-up'; }
 $('warmStop').addEventListener('click', stopWarm);
+function readWarmSettings() {
+  WU.pattern = PATTERNS[$('wuPattern').value] || PATTERNS.five; WU.dir = +$('wuDir').value || 1;
+  WU.beat = 60 / Math.max(50, Math.min(200, +$('wuBpm').value || 100));
+}
 function nextWarmPass() {
-  WU.pass++; const t0 = ctx.currentTime + 0.1;
-  PATTERN.forEach((st, i) => playTone(WU.start + st, WU.noteDur * 0.95, t0 + i * WU.noteDur));
-  WU.phase = 'listen'; WU.phaseEnd = performance.now() + (PATTERN.length * WU.noteDur + 0.3) * 1000;
-  $('warmTitle').textContent = 'Pass ' + WU.pass + ' · from ' + noteName(WU.start); $('warmInfo').textContent = 'Listen…';
+  readWarmSettings(); WU.pass++;
+  const P = WU.pattern, b = WU.beat, t0 = ctx.currentTime + 0.15;
+  let t = t0;
+  if (WU.chordOn) { playChord(WU.start, t, b * 1.6); t += b * 2; }
+  P.forEach((st, i) => { if (WU.clickOn) click(t + i * b, i === 0); playTone(WU.start + st, b * 0.92, t + i * b, i === 0 || i === P.length - 1 ? 0.7 : 0.55); });
+  const listenEnd = t + P.length * b;
+  // one beat of rest, then the singer's pass on the click (optionally with a soft piano guide)
+  const singStart = listenEnd + b;
+  if (WU.clickOn) for (let i = -1; i < P.length; i++) click(singStart + i * b, i === 0);
+  if (WU.guideOn) P.forEach((st, i) => playTone(WU.start + st, b * 0.9, singStart + i * b, 0.3));
+  WU.phase = 'listen'; WU.singStartAt = performance.now() + (singStart - ctx.currentTime) * 1000; WU.phaseEnd = WU.singStartAt + (P.length * b + 0.4) * 1000;
+  pianoPreload(WU.start + WU.dir * 1 - 1, WU.start + WU.dir * 1 + 15, ['10', '06']);
+  $('warmTitle').textContent = 'Pass ' + WU.pass + ' · ' + noteName(WU.start) + ' major'; $('warmInfo').textContent = 'Listen… then sing: ' + P.map(st => noteName(WU.start + st)).join(' ');
 }
 function warmTick(now) {
   if (!WU.on) return;
-  if (WU.phase === 'listen' && now >= WU.phaseEnd) { WU.phase = 'sing'; WU.passStart = now; WU.phaseEnd = now + (PATTERN.length * WU.noteDur + 0.6) * 1000; $('warmInfo').textContent = 'Now you: ' + PATTERN.map(st => noteName(WU.start + st)).join(' '); }
+  if (WU.phase === 'listen' && now >= WU.singStartAt) { WU.phase = 'sing'; WU.passStart = now; $('warmInfo').textContent = 'Now you: ' + WU.pattern.map(st => noteName(WU.start + st)).join(' '); }
   else if (WU.phase === 'sing' && now >= WU.phaseEnd) {
     const pts = sessionLog.filter(p => p.t >= WU.passStart);
     let msg;
     if (pts.length < 8) msg = 'No voice heard. Sing it back after the piano.';
     else {
-      const targets = PATTERN.map(st => WU.start + st);
+      const targets = WU.pattern.map(st => WU.start + st);
       const hit = pts.filter(p => targets.some(t => Math.abs(p.midi - t) <= 0.25)).length / pts.length;
       const bias = pts.reduce((a, p) => a + (p.midi - Math.round(p.midi)) * 100, 0) / pts.length;
-      msg = Math.round(hit * 100) + '% on the scale' + (Math.abs(bias) > 8 ? (bias < 0 ? ', leaning flat' : ', leaning sharp') : '') + '.';
-      if (hit >= 0.6) { WU.start++; msg += ' Up a half step.'; } else msg += ' Same notes again.';
-      if (comfortTop != null && WU.start + 7 > comfortTop + 2) { msg += ' That is your top for today.'; $('warmInfo').textContent = msg; stopWarm(); return; }
+      msg = Math.round(hit * 100) + '% on the notes' + (Math.abs(bias) > 8 ? (bias < 0 ? ', leaning flat' : ', leaning sharp') : '') + '.';
+      if (hit >= 0.6) { WU.start += WU.dir; msg += WU.dir > 0 ? ' Up a half step.' : ' Down a half step.'; } else msg += ' Same key again.';
+      const top = WU.start + Math.max(...WU.pattern);
+      if (comfortTop != null && WU.dir > 0 && top > comfortTop + 2) { msg += ' That is your top for today.'; $('warmInfo').textContent = msg; stopWarm(); return; }
+      if (WU.start < 36) { msg += ' Low enough for today.'; $('warmInfo').textContent = msg; stopWarm(); return; }
     }
     $('warmInfo').textContent = msg; WU.phase = 'gap'; WU.phaseEnd = now + 1200;
   }
   else if (WU.phase === 'gap' && now >= WU.phaseEnd) nextWarmPass();
 }
+// First touch of the piano: warm the sampler quietly so the key tap sounds real.
+piano.addEventListener('pointerdown', () => { pianoPreload(comfortTop != null ? comfortTop - 6 : 48, comfortTop != null ? comfortTop + 6 : 72, ['10']); }, { once: true });
 
 // ---------- UI loop ----------
 function uiTick() {
@@ -932,6 +1021,7 @@ drawWave(); drawPiano();
 // test hook: zero-crossing frequency of the rendered output around 50%
 window.__ctxGet = () => ctx; Object.defineProperty(window,'__ctx',{get:()=>ctx});
 window.__sim = (pts) => { for (const p of pts) { sessionLog.push(p); traceHist.push(p); } lastMidi = pts[pts.length-1].midi; viewLo = lastMidi - 8; analyseSession(); drawPiano(); drawTrace(pts[pts.length-1].t); };
+window.__piano = async () => { const out = {}; for (const [k, v] of PIANO.cache) { try { const b = await v; out[k] = b.duration.toFixed(2); } catch (e) { out[k] = 'ERR'; } } return out; };
 window.__setRef = (points, semis) => { S.ref = { points, semis }; updateRefUI(); analyseSession(); };
 window.__dbg = () => ({ ref: refRec ? refRec.points.length : null, saved: S.ref ? S.ref.points.length : null, log: sessionLog.length, voiced: sessionLog.filter(p=>p.frac!=null).length, playing: S.playing, loops: S.loops, pos: S.pos/S.outLen });
 window.__shed = () => { if (!S.out) return null; const o = S.out[0], a = Math.floor(S.outLen * 0.4), b = Math.floor(S.outLen * 0.6); let z = 0; for (let i = a + 1; i < b; i++) if (o[i - 1] < 0 && o[i] >= 0) z++; return { hz: z / ((b - a) / S.sr), outLen: S.outLen, ready: Array.from(S.ready) }; };
