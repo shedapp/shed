@@ -100,6 +100,8 @@ label.inline input{width:64px;font:inherit;font-family:var(--mono);background:va
 .hint{color:var(--muted);font-size:13px}
 .keys{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:12px}
 kbd{font-family:var(--mono);background:var(--panel2);border:1px solid var(--line);border-radius:5px;padding:1px 6px;color:var(--fg)}
+.updatebar{position:fixed;left:50%;top:calc(10px + env(safe-area-inset-top,0px));transform:translateX(-50%);background:var(--accent);color:var(--accent-ink);padding:8px 12px;border-radius:10px;font-size:14px;font-weight:600;z-index:30;display:flex;gap:10px;align-items:center;box-shadow:0 6px 24px rgba(0,0,0,.4)}
+.updatebar button{min-height:30px;padding:4px 10px;background:var(--accent-ink);color:var(--accent);border:none;font-size:13px}
 .toast{position:fixed;left:50%;bottom:calc(16px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--panel2);border:1px solid var(--line);padding:10px 14px;border-radius:10px;font-size:14px;max-width:90vw;opacity:0;pointer-events:none;transition:opacity .2s}
 .toast.show{opacity:1}
 .phone-only{display:none}
@@ -146,7 +148,7 @@ kbd{font-family:var(--mono);background:var(--panel2);border:1px solid var(--line
 <div class="wrap">
   <header>
     <div><div class="brand">Shed<span>.</span></div><div class="tag">Any song, your key, your tempo. Loop the hard part. See your pitch.</div></div>
-    <div class="privacy">Audio never leaves your device</div>
+    <div class="privacy">Audio never leaves your device · <span id="buildTag"></span></div>
   </header>
 
   <section class="panel song" id="songPanel">
@@ -1453,7 +1455,7 @@ function syncMini() {
 S.vocal = 0; S.srcFull = null; S.stems = null;
 const MODEL_PARTS = ['models/htdemucs.part0', 'models/htdemucs.part1'];
 let demucsLoading = null;
-function ensureDemucs() { if (window.ShedDemucs) return Promise.resolve(window.ShedDemucs); if (!demucsLoading) demucsLoading = new Promise((res, rej) => { const sc = document.createElement('script'); sc.src = 'demucs/shed-demucs.js'; sc.onload = () => res(window.ShedDemucs); sc.onerror = () => rej(new Error('engine missing')); document.head.appendChild(sc); }); return demucsLoading; }
+function ensureDemucs() { if (window.ShedDemucs) return Promise.resolve(window.ShedDemucs); if (!demucsLoading) demucsLoading = new Promise((res, rej) => { const sc = document.createElement('script'); sc.src = 'demucs/shed-demucs.js?b=' + SHED_BUILD; sc.onload = () => res(window.ShedDemucs); sc.onerror = () => rej(new Error('engine missing')); document.head.appendChild(sc); }); return demucsLoading; }
 const KARA_MODEL = 'models/kara2.onnx', KARA_PARAMS = { nfft: 5120, compensate: 1.065 };
 async function separateVocals() {
   if (!S.src) return;
@@ -1535,7 +1537,17 @@ autoMic();
 document.addEventListener('pointerdown', () => { autoMic(); }, { once: true });
 
 // ---------- Offline: keep the app and the piano on the device once installed ----------
-if ('serviceWorker' in navigator && window.top === window.self && /^https?:/.test(location.protocol)) { navigator.serviceWorker.register('sw.js').catch(() => {}); }
+const SHED_BUILD = '2610121609';
+if ('serviceWorker' in navigator && window.top === window.self && /^https?:/.test(location.protocol)) {
+  navigator.serviceWorker.register('sw.js?b=' + SHED_BUILD).then(reg => { reg.update().catch(() => {}); setInterval(() => reg.update().catch(() => {}), 60 * 60 * 1000); }).catch(() => {});
+  navigator.serviceWorker.addEventListener('message', (e) => { if (e.data && e.data.type === 'shed-updated' && e.data.build !== SHED_BUILD) showUpdate(); });
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (window.__shedReloading) return; });
+}
+function showUpdate() {
+  if ($('updateBar')) return;
+  const bar = document.createElement('div'); bar.id = 'updateBar'; bar.className = 'updatebar'; bar.innerHTML = 'A new version of Shed is ready. <button id="updateNow">Update</button>';
+  document.body.appendChild(bar); $('updateNow').addEventListener('click', () => { window.__shedReloading = true; location.reload(); });
+}
 
 // ---------- UI loop ----------
 function uiTick() {
@@ -1547,6 +1559,7 @@ requestAnimationFrame(uiTick);
 try { const a4 = localStorage.getItem('shed.a4'); if (a4) $('a4').value = a4; } catch (e) {}
 $('a4').addEventListener('change', () => { try { localStorage.setItem('shed.a4', $('a4').value); } catch (e) {} });
 drawWave(); drawPiano();
+$('buildTag').textContent = 'v' + SHED_BUILD;
 // test hook: zero-crossing frequency of the rendered output around 50%
 window.__ctxGet = () => ctx; Object.defineProperty(window,'__ctx',{get:()=>ctx});
 window.__sim = (pts) => { for (const p of pts) { sessionLog.push(p); traceHist.push(p); } lastMidi = pts[pts.length-1].midi; viewLo = lastMidi - 8; analyseSession(); drawPiano(); drawTrace(pts[pts.length-1].t); };
