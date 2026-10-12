@@ -112,9 +112,20 @@
     for (let t = 0; t < T; t++) { const b = t * half; for (let k = 0; k < F; k++) { Ar[b + k] = spek[(0 * F + k) * T + t]; Ai[b + k] = spek[(1 * F + k) * T + t]; Br[b + k] = spek[(2 * F + k) * T + t]; Bi[b + k] = spek[(3 * F + k) * T + t]; } }
     return istft2(Ar, Ai, Br, Bi, T, nfft, MDX.HOP, false, len);
   }
+  // Butterworth high-pass (two cascaded biquads, Q = 0.54 and 1.31 → 4th order), in place, with a short fade to avoid a start click
+  function highpass(x, sr, fc) {
+    for (const Q of [0.5412, 1.3066]) {
+      const w0 = 2 * Math.PI * fc / sr, cw = Math.cos(w0), sw = Math.sin(w0), al = sw / (2 * Q);
+      const b0 = (1 + cw) / 2, b1 = -(1 + cw), b2 = (1 + cw) / 2, a0 = 1 + al, a1 = -2 * cw, a2 = 1 - al;
+      const B0 = b0 / a0, B1 = b1 / a0, B2 = b2 / a0, A1 = a1 / a0, A2 = a2 / a0;
+      let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+      for (let i = 0; i < x.length; i++) { const xi = x[i]; const y = B0 * xi + B1 * x1 + B2 * x2 - A1 * y1 - A2 * y2; x2 = x1; x1 = xi; y2 = y1; y1 = y; x[i] = y; }
+    }
+    return x;
+  }
   function resample(input, ratio) { const outLen = Math.floor(input.length / ratio), out = new Float32Array(outLen), n = input.length; for (let i = 0; i < outLen; i++) { const x = i * ratio; const j = x | 0; const t = x - j; const y0 = input[j - 1 < 0 ? 0 : j - 1], y1 = input[j], y2 = input[j + 1 < n ? j + 1 : n - 1], y3 = input[j + 2 < n ? j + 2 : n - 1]; const a = (3 * (y1 - y2) - y0 + y3) / 2, b = 2 * y2 + y0 - (5 * y1 + y3) / 2, c = (y2 - y0) / 2; out[i] = ((a * t + b) * t + c) * t + y1; } return out; }
 
-  const api = { demucsPrep, demucsPost, mdxSpek, mdxWave, makeFFTmixed, stft2, istft2, SEG, SR };
+  const api = { demucsPrep, demucsPost, mdxSpek, mdxWave, makeFFTmixed, stft2, istft2, highpass, SEG, SR };
 
   // ---------- Worker side ----------
   if (inWorker) {
@@ -167,14 +178,28 @@
   function back(oL, oR, inL, inR, ratio) { const b = 1 / ratio; const bL = resample(oL, b), bR = resample(oR, b); const fL = new Float32Array(inL.length), fR = new Float32Array(inR.length); fL.set(bL.subarray(0, Math.min(bL.length, fL.length))); fR.set(bR.subarray(0, Math.min(bR.length, fR.length))); return [fL, fR]; }
 
   // All vocals (Demucs). Returns {vocalsL, vocalsR, ep} at the input rate.
-  async function separateVocals(inL, inR, sr, modelParts, onProgress) {
+  async function separateVocals(inL, inR, sr, modelParts, onProgress, opts) {
+    opts = Object.assign({ shifts: 1, overlap: 0.25 }, opts || {});
     const sess = await getSession('demucs', modelParts, onProgress); const ort = root.ort;
-    let L = inL, R = inR; const ratio = sr / SR; if (Math.abs(ratio - 1) > 1e-6) { L = resample(inL, ratio); R = resample(inR, ratio); }
+    let L0 = inL, R0 = inR; const ratio = sr / SR; if (Math.abs(ratio - 1) > 1e-6) { L0 = resample(inL, ratio); R0 = resample(inR, ratio); }
+    // shift averaging (demucs apply_model shifts): run on copies offset by up to 0.5 s and average
+    const maxShift = Math.round(0.5 * SR); const accL = new Float32Array(L0.length), accR = new Float32Array(R0.length);
+    const stride = Math.round(SEG * (1 - opts.overlap));
+    for (let sh = 0; sh < opts.shifts; sh++) {
+      const off = opts.shifts === 1 ? 0 : Math.floor(Math.random() * maxShift);
+      const L = new Float32Array(L0.length + off), R = new Float32Array(R0.length + off); L.set(L0, off); R.set(R0, off);
+      const r = await demucsPass(sess, ort, L, R, stride, (ph, f, left) => onProgress && onProgress(ph, (sh + f) / opts.shifts, left == null ? null : left + (opts.shifts - sh - 1) * (left / Math.max(1e-6, 1 - f)) * 0));
+      for (let i = 0; i < L0.length; i++) { accL[i] += r[0][off + i] / opts.shifts; accR[i] += r[1][off + i] / opts.shifts; }
+    }
+    if (Math.abs(ratio - 1) > 1e-6) { const [a, b] = back(accL, accR, inL, inR, ratio); return { vocalsL: a, vocalsR: b, ep: sess._ep }; }
+    return { vocalsL: accL, vocalsR: accR, ep: sess._ep };
+  }
+  async function demucsPass(sess, ort, L, R, stride, onProgress) {
     const T = L.length; let mean = 0; for (let i = 0; i < T; i++) mean += 0.5 * (L[i] + R[i]); mean /= T; let v = 0; for (let i = 0; i < T; i++) v += (0.5 * (L[i] + R[i]) - mean) ** 2; const std = Math.sqrt(v / Math.max(1, T - 1)) || 1;
     const wL = new Float32Array(T), wR = new Float32Array(T); for (let i = 0; i < T; i++) { wL[i] = (L[i] - mean) / std; wR[i] = (R[i] - mean) / std; }
     const vL = new Float32Array(T), vR = new Float32Array(T), ws = new Float32Array(T);
     const tri = new Float32Array(SEG); const h = SEG >> 1; for (let i = 0; i < h; i++) tri[i] = (i + 1) / h; for (let i = h; i < SEG; i++) tri[i] = (SEG - i) / (SEG - h);
-    const offs = []; for (let off = 0; ; off += STRIDE) { offs.push(off); if (off + SEG >= T) break; }
+    const offs = []; for (let off = 0; ; off += stride) { offs.push(off); if (off + SEG >= T) break; }
     const nSeg = offs.length; const t0 = performance.now();
     const prep = (off) => { const n = Math.min(SEG, T - off); const cL = new Float32Array(SEG), cR = new Float32Array(SEG); cL.set(wL.subarray(off, off + n)); cR.set(wR.subarray(off, off + n)); return job('demucsPrep', { L: cL, R: cR }, [cL.buffer, cR.buffer]).then(r => Object.assign(r, { off, n })); };
     let prepNext = prep(offs[0]); const posts = []; let done = 0;
@@ -187,13 +212,13 @@
     }
     await Promise.all(posts);
     for (let i = 0; i < T; i++) { const w = ws[i] || 1; vL[i] = vL[i] / w * std + mean; vR[i] = vR[i] / w * std + mean; }
-    if (Math.abs(ratio - 1) > 1e-6) { const [a, b] = back(vL, vR, inL, inR, ratio); return { vocalsL: a, vocalsR: b, ep: sess._ep }; }
-    return { vocalsL: vL, vocalsR: vR, ep: sess._ep };
+    return [vL, vR];
   }
   // Karaoke model primary stem (band + backing vocals). Lead vocal = mix − result.
-  async function separateKaraoke(inL, inR, sr, modelUrl, params, onProgress) {
+  async function separateKaraoke(inL, inR, sr, modelUrl, params, onProgress, opts) {
+    opts = Object.assign({ denoise: false, overlap: 0.25 }, opts || {});
     const sess = await getSession('kara', [modelUrl], onProgress); const ort = root.ort;
-    const nfft = params.nfft, comp = params.compensate, overlap = 0.25;
+    const nfft = params.nfft, comp = params.compensate, overlap = opts.overlap;
     let L = inL, R = inR; const ratio = sr / SR; if (Math.abs(ratio - 1) > 1e-6) { L = resample(inL, ratio); R = resample(inR, ratio); }
     const T = L.length, chunk = MDX.HOP * (MDX.DIM_T - 1), trim = nfft >> 1, step = Math.floor(chunk * (1 - overlap));
     const padLen = trim + T + chunk; const mL = new Float32Array(padLen), mR = new Float32Array(padLen); mL.set(L, trim); mR.set(R, trim);
@@ -205,6 +230,7 @@
       const cur = await prepNext; if (c + 1 < nCh) prepNext = prep(offs[c + 1]);
       const res = await sess.run({ input: new ort.Tensor('float32', cur.spek, [1, 4, MDX.DIM_F, MDX.DIM_T]) });
       const out = res.output.data.slice();
+      if (opts.denoise) { const neg = cur.spek; for (let q = 0; q < neg.length; q++) neg[q] = -neg[q]; const r2 = await sess.run({ input: new ort.Tensor('float32', neg, [1, 4, MDX.DIM_F, MDX.DIM_T]) }); const o2 = r2.output.data; for (let q = 0; q < out.length; q++) out[q] = 0.5 * (out[q] - o2[q]); }
       posts.push(job('mdxWave', { spek: out, nfft, len: chunk }, [out.buffer]).then(r => { const n = Math.min(chunk, padLen - cur.i); for (let j = 0; j < n; j++) { rL[cur.i + j] += r.L[j] * win[j]; rR[cur.i + j] += r.R[j] * win[j]; div[cur.i + j] += win[j]; } done++; if (onProgress) { const el = (performance.now() - t0) / 1000; onProgress('separate', done / nCh, el / done * (nCh - done)); } }));
       await tick();
     }

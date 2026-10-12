@@ -178,9 +178,9 @@ kbd{font-family:var(--mono);background:var(--panel2);border:1px solid var(--line
       </div>
       <div class="ctl vocal x-more">
         <h3>Lead vocal <b id="voclbl">full</b></h3>
-        <div class="row" id="sepRow"><button id="sepBtn" disabled>Separate vocals with AI</button></div>
+        <div class="row" id="sepRow"><button id="sepBtn" disabled>Separate vocals with AI</button><button id="sepFast" disabled title="Single pass, 25% overlap: about 3× faster, slightly more artifacts" style="flex:0 0 auto">Fast</button></div>
         <div class="row" id="vocalModes" hidden><button data-v="0" class="on">Full</button><button data-v="1">Lead −12 dB</button><button data-v="2">Lead off</button><button data-v="4">Band only</button><button data-v="3">Lead only</button></div>
-        <div class="hint" id="stemHint">Two AI models run on this computer; nothing is uploaded. "Lead off" keeps the backing vocals. Laptop or desktop with Chrome, Edge or Safari 26; about a minute per song, once.</div>
+        <div class="hint" id="stemHint">Two AI models run on this computer; nothing is uploaded. "Lead off" keeps the backing vocals. Laptop or desktop with Chrome, Edge or Safari 26; about a minute per song at best quality, once.</div>
       </div>
       <div class="ctl loop x-more">
         <h3>Loop <b id="looplbl">off</b></h3>
@@ -1184,25 +1184,29 @@ async function separateVocals() {
   let D; try { D = await ensureDemucs(); } catch (e) { toast('The separation engine could not load.'); return; }
   if (!S.srcFull) S.srcFull = S.src;
   const full = S.srcFull; const L = full[0], R = full[1] || full[0];
-  const st = $('status'); const btn = $('sepBtn'); btn.disabled = true; st.classList.add('busy');
+  const st = $('status'); const btn = $('sepBtn'); btn.disabled = true; $('sepFast').disabled = true; st.classList.add('busy');
   const fmtLeft = (sec) => sec > 90 ? Math.round(sec / 60) + ' min left' : Math.round(sec) + ' s left';
   const prog = (label) => (phase, f, left) => { if (phase === 'download') st.textContent = label + ' model ' + Math.round(f * 100) + '%'; else if (phase === 'compile') st.textContent = 'Preparing ' + label + '…'; else st.textContent = label + ' ' + Math.round(f * 100) + '%' + (left != null && f < 1 ? ' · ' + fmtLeft(left) : ''); };
   try {
     const t0 = performance.now();
-    const all = await D.separateVocals(L, R, S.sr, MODEL_PARTS, prog('All vocals'));
-    const kara = await D.separateKaraoke(L, R, S.sr, KARA_MODEL, KARA_PARAMS, prog('Lead vocal'));
+    const best = !separateVocals.fast;
+    const all = await D.separateVocals(L, R, S.sr, MODEL_PARTS, prog('All vocals'), best ? { shifts: 2, overlap: 0.5 } : { shifts: 1, overlap: 0.25 });
+    const kara = await D.separateKaraoke(L, R, S.sr, KARA_MODEL, KARA_PARAMS, prog('Lead vocal'), best ? { denoise: true, overlap: 0.5 } : { denoise: false, overlap: 0.25 });
+    // cleanup: vocal stems carry no music below 60 Hz; what the nets put there is kick and bass bleed
+    for (const a of [all.vocalsL, all.vocalsR]) D.highpass(a, S.sr, 60);
     // Karaoke 2 returns band + backing vocals; the lead is what is left
     const n = L.length, leadL = new Float32Array(n), leadR = new Float32Array(n);
     for (let i = 0; i < n; i++) { leadL[i] = L[i] - kara.L[i]; leadR[i] = R[i] - kara.R[i]; }
+    D.highpass(leadL, S.sr, 60); D.highpass(leadR, S.sr, 60);
     S.stems = { L: all.vocalsL, R: all.vocalsR, leadL, leadR };
     stemsUI();
-    $('stemHint').textContent = 'Separated in ' + Math.round((performance.now() - t0) / 1000) + ' s on this computer (' + (all.ep === 'webgpu' ? 'GPU' : 'CPU') + '). Saved with the song.';
+    $('stemHint').textContent = (best ? 'Best quality: ' : 'Fast: ') + 'separated in ' + Math.round((performance.now() - t0) / 1000) + ' s on this computer (' + (all.ep === 'webgpu' ? 'GPU' : 'CPU') + '). Saved with the song.';
     st.textContent = 'Reading the melody…';
     await melodyFromLead();
     saveSongSoon(); setVocal(2);
     toast('Done. Lead off keeps the backing vocals; the melody from the record is now the ghost line.');
   } catch (e) {
-    console.error(e); st.textContent = 'Ready'; btn.disabled = false;
+    console.error(e); st.textContent = 'Ready'; btn.disabled = false; $('sepFast').disabled = false;
     toast('Separation failed: ' + (e.message || e) + '. Try again, or a shorter file.');
   } finally { st.classList.remove('busy'); if (S.ready && S.ready.every(Boolean)) st.textContent = 'Ready'; }
 }
@@ -1219,7 +1223,8 @@ function melodyFromLead() {
     melodyWorker.postMessage({ id, type: 'melody', x: mono, sr: S.sr }, [mono.buffer]);
   });
 }
-$('sepBtn').addEventListener('click', separateVocals);
+$('sepBtn').addEventListener('click', () => { separateVocals.fast = false; separateVocals(); });
+$('sepFast').addEventListener('click', () => { separateVocals.fast = true; separateVocals(); });
 function setVocal(level) {
   if (!S.src) return;
   if (!S.srcFull) S.srcFull = S.src;
@@ -1240,7 +1245,7 @@ function setVocal(level) {
   peaks = null; rerender();
 }
 document.querySelectorAll('[data-v]').forEach(b => b.addEventListener('click', () => setVocal(+b.dataset.v)));
-function stemsUI() { const has = !!S.stems; $('vocalModes').hidden = !has; $('sepRow').hidden = has; $('sepBtn').disabled = !S.src; document.querySelectorAll('[data-v="1"],[data-v="2"],[data-v="3"]').forEach(b => b.disabled = !(has && S.stems.leadL)); if (has) $('stemHint').textContent = S.stems.leadL ? 'Stems saved with this song.' : 'Older stems: run the separation again for lead-vocal modes.'; else $('stemHint').textContent = 'Demucs v4 runs on this computer; nothing is uploaded. Laptop or desktop with Chrome, Edge or Safari 26. About a minute per song, once.'; }
+function stemsUI() { const has = !!S.stems; $('vocalModes').hidden = !has; $('sepRow').hidden = has; $('sepBtn').disabled = !S.src; $('sepFast').disabled = !S.src; document.querySelectorAll('[data-v="1"],[data-v="2"],[data-v="3"]').forEach(b => b.disabled = !(has && S.stems.leadL)); if (has) $('stemHint').textContent = S.stems.leadL ? 'Stems saved with this song.' : 'Older stems: run the separation again for lead-vocal modes.'; else $('stemHint').textContent = 'Demucs v4 runs on this computer; nothing is uploaded. Laptop or desktop with Chrome, Edge or Safari 26. About a minute per song, once.'; }
 
 // ---------- Microphone: remember permission and start automatically next time ----------
 async function autoMic() {
