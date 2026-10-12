@@ -145,15 +145,23 @@
   const selfUrl = (document.currentScript && document.currentScript.src) || 'demucs/shed-demucs.js';
   const pool = { workers: [], next: 0, pending: new Map(), seq: 0 };
   function poolSize() { return Math.max(2, Math.min(4, (navigator.hardwareConcurrency || 4) - 1)); }
+  let poolReady = null;
   function ensurePool() {
-    if (pool.workers.length) return;
-    for (let i = 0; i < poolSize(); i++) {
-      const w = new Worker(selfUrl);
-      w.onmessage = (e) => { const p = pool.pending.get(e.data.id); if (p) { pool.pending.delete(e.data.id); p(e.data.r); } };
-      pool.workers.push(w);
-    }
+    if (poolReady) return poolReady;
+    poolReady = (async () => {
+      // A page served from another origin (or from a file on disk) cannot start a worker from this URL directly:
+      // fetch the script and start the workers from an in-memory copy instead.
+      let url = selfUrl;
+      try { const a = new URL(selfUrl, location.href); if (a.origin !== location.origin || location.protocol === 'file:') { const txt = await (await fetch(a.href)).text(); url = URL.createObjectURL(new Blob([txt], { type: 'text/javascript' })); } } catch (e) {}
+      for (let i = 0; i < poolSize(); i++) {
+        const w = new Worker(url);
+        w.onmessage = (e) => { const p = pool.pending.get(e.data.id); if (p) { pool.pending.delete(e.data.id); p(e.data.r); } };
+        pool.workers.push(w);
+      }
+    })();
+    return poolReady;
   }
-  function job(op, data, transfer) { ensurePool(); const id = ++pool.seq; const w = pool.workers[pool.next++ % pool.workers.length]; return new Promise((res) => { pool.pending.set(id, res); w.postMessage(Object.assign({ id, op }, data), transfer || []); }); }
+  async function job(op, data, transfer) { await ensurePool(); const id = ++pool.seq; const w = pool.workers[pool.next++ % pool.workers.length]; return new Promise((res) => { pool.pending.set(id, res); w.postMessage(Object.assign({ id, op }, data), transfer || []); }); }
 
   let ortLoading = null;
   function loadScript(src) { return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error('Could not load ' + src)); document.head.appendChild(s); }); }
