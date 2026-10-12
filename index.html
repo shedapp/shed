@@ -184,8 +184,8 @@ kbd{font-family:var(--mono);background:var(--panel2);border:1px solid var(--line
       <div class="ctl vocal x-more">
         <h3>Lead vocal <b id="voclbl">full</b></h3>
         <div class="row" id="sepRow"><button id="sepBtn" disabled>Separate vocals with AI</button></div>
-        <div class="row" id="vocalModes" hidden><button data-v="0" class="on">Full</button><button data-v="1">Quieter</button><button data-v="2">Off</button><button data-v="3">Vocals only</button></div>
-        <div class="hint" id="stemHint">Demucs v4 runs on this computer; nothing is uploaded. Laptop or desktop with Chrome, Edge or Safari 26. About a minute per song, once.</div>
+        <div class="row" id="vocalModes" hidden><button data-v="0" class="on">Full</button><button data-v="1">Lead −12 dB</button><button data-v="2">Lead off</button><button data-v="4">Band only</button><button data-v="3">Lead only</button></div>
+        <div class="hint" id="stemHint">Two AI models run on this computer; nothing is uploaded. "Lead off" keeps the backing vocals. Laptop or desktop with Chrome, Edge or Safari 26; about a minute per song, once.</div>
       </div>
       <div class="ctl loop x-more">
         <h3>Loop <b id="looplbl">off</b></h3>
@@ -385,6 +385,10 @@ if (typeof module !== 'undefined') module.exports = { makeFFT, timeStretch, resa
 // Returns the rendered samples for the chunk with the padding removed (padIn/tempo on each side).
 if (typeof self !== 'undefined' && typeof importScripts === 'function') {
   self.onmessage = (e) => {
+    if (e.data.type === 'melody') {
+      const { id, x, sr } = e.data; const pts = trackMelody(x, sr);
+      self.postMessage({ id, type: 'melody', points: pts }); return;
+    }
     if (e.data.type === 'vocal') {
       const { id, L, R, sr, strength } = e.data;
       const out = reduceVocals(L, R, sr, strength, (f) => self.postMessage({ id, type: 'vocal', progress: f }));
@@ -490,6 +494,49 @@ function reduceVocals(L, R, sr, strength, onProgress) {
   return [outL, outR];
 }
 if (typeof module !== 'undefined') { module.exports.reduceVocals = reduceVocals; module.exports.stft = stft; }
+
+// ---------- Melody tracker: pitch of a (separated) lead vocal, offline, whole song ----------
+// Normalised-square-difference (McLeod) via FFT autocorrelation, vocal range 70–1200 Hz,
+// voicing by clarity + energy, median smoothing, octave-jump suppression. Returns [{t, midi}] with t in seconds.
+function trackMelody(x, sr, opts = {}) {
+  const N = 2048, H = opts.hop || 512, M = 4096, fft = makeFFT(M);
+  const fLo = 70, fHi = 1200, lagMin = Math.floor(sr / fHi), lagMax = Math.min(N - 1, Math.ceil(sr / fLo));
+  const re = new Float32Array(M), im = new Float32Array(M);
+  const nFr = Math.max(0, Math.floor((x.length - N) / H) + 1);
+  // global energy reference for voicing
+  let gl = 0; for (let i = 0; i < x.length; i++) gl += x[i] * x[i]; const gRms = Math.sqrt(gl / Math.max(1, x.length));
+  const raw = new Float32Array(nFr).fill(-1), clar = new Float32Array(nFr), ener = new Float32Array(nFr);
+  const cum = new Float64Array(N + 1);
+  for (let f = 0; f < nFr; f++) {
+    const o = f * H; let e = 0; for (let i = 0; i < N; i++) { const v = x[o + i]; re[i] = v; im[i] = 0; e += v * v; } for (let i = N; i < M; i++) { re[i] = 0; im[i] = 0; }
+    ener[f] = Math.sqrt(e / N); if (ener[f] < 0.06 * gRms || ener[f] < 1e-4) continue;
+    fft(re, im, false); for (let i = 0; i < M; i++) { re[i] = re[i] * re[i] + im[i] * im[i]; im[i] = 0; } fft(re, im, true);
+    cum[0] = 0; for (let i = 0; i < N; i++) cum[i + 1] = cum[i] + x[o + i] * x[o + i];
+    // nsdf(tau) = 2*acf(tau) / (E[0..N-tau] + E[tau..N])
+    let maxV = 0; const nsdf = new Float32Array(lagMax + 1);
+    for (let tau = lagMin; tau <= lagMax; tau++) { const acf = re[tau] / M; const m = (cum[N - tau] - cum[0]) + (cum[N] - cum[tau]); nsdf[tau] = m > 0 ? 2 * acf / m : 0; if (nsdf[tau] > maxV) maxV = nsdf[tau]; }
+    if (maxV < 0.6) continue;
+    // first peak above 0.85*max (avoids octave-down errors), parabolic refinement
+    const thr = Math.max(0.6, maxV * 0.85); let best = -1;
+    for (let tau = lagMin + 1; tau < lagMax; tau++) if (nsdf[tau] > nsdf[tau - 1] && nsdf[tau] >= nsdf[tau + 1] && nsdf[tau] > thr) { best = tau; break; }
+    if (best < 0) continue;
+    const a = nsdf[best - 1], b = nsdf[best], c = nsdf[best + 1]; const den = (a - 2 * b + c); const shift = den ? (a - c) / (2 * den) : 0;
+    const f0 = sr / (best + shift); raw[f] = 69 + 12 * Math.log2(f0 / 440); clar[f] = b;
+  }
+  // octave-jump suppression against a running median, then 5-frame median smoothing
+  const out = new Float32Array(nFr).fill(-1); let prev = -1;
+  // only undo a brief octave glitch: a jump of ~12 that lasts under 80 ms and comes back
+  for (let f = 0; f < nFr; f++) out[f] = raw[f];
+  const glitch = Math.ceil(0.08 * sr / H);
+  for (let f = 1; f < nFr - 1; f++) { if (out[f] < 0 || out[f - 1] < 0) continue; const d = out[f] - out[f - 1]; if (Math.abs(Math.abs(d) - 12) > 0.3) continue; let g = f; while (g < nFr && g - f < glitch && out[g] >= 0 && Math.abs((out[g] - out[f - 1]) - d) < 0.6) g++; if (g < nFr && g - f < glitch && out[g] >= 0 && Math.abs(out[g] - out[f - 1]) < 0.6) for (let q = f; q < g; q++) out[q] -= d; }
+  const sm = new Float32Array(nFr).fill(-1);
+  for (let f = 0; f < nFr; f++) { if (out[f] < 0) continue; const w = []; for (let d = -2; d <= 2; d++) { const g = f + d; if (g >= 0 && g < nFr && out[g] >= 0) w.push(out[g]); } w.sort((p, q) => p - q); sm[f] = w[w.length >> 1]; }
+  // drop voiced islands shorter than 60 ms
+  const minFr = Math.ceil(0.06 * sr / H); const pts = []; let start = -1;
+  for (let f = 0; f <= nFr; f++) { const v = f < nFr && sm[f] >= 0; if (v && start < 0) start = f; if (!v && start >= 0) { if (f - start >= minFr) for (let g = start; g < f; g++) pts.push({ t: (g * H + N / 2) / sr, midi: sm[g] }); start = -1; } }
+  return pts;
+}
+if (typeof module !== 'undefined') module.exports.trackMelody = trackMelody;
 </script>
 <script>
 (() => {
@@ -650,7 +697,7 @@ async function loadFile(file, saved) {
     // Very long files (over 12 min) are processed in mono to keep memory and render time in check on phones.
     if (chans.length === 2 && ab.duration > 12 * 60) { const m = new Float32Array(chans[0].length); for (let i = 0; i < m.length; i++) m[i] = 0.5 * (chans[0][i] + chans[1][i]); S.src = [m]; }
     else S.src = chans.map(c => new Float32Array(c)); // own copies
-    S.pos = 0; S.outLen = 0; S.playing = false; S.loopA = S.loopB = null; S.loop = false; S.loops = 0; S.file = file; S.ref = null; take = null; $('playTake').disabled = true; S.srcFull = null; S.vocal = 0; S.stems = saved && saved.stems ? { L: fromI16(saved.stems.l), R: fromI16(saved.stems.r) } : null; document.querySelectorAll('[data-v]').forEach(b => b.classList.toggle('on', b.dataset.v === '0')); $('voclbl').textContent = 'full'; stemsUI();
+    S.pos = 0; S.outLen = 0; S.playing = false; S.loopA = S.loopB = null; S.loop = false; S.loops = 0; S.file = file; S.ref = null; take = null; $('playTake').disabled = true; S.srcFull = null; S.vocal = 0; S.stems = saved && saved.stems ? { L: fromI16(saved.stems.l), R: fromI16(saved.stems.r), leadL: saved.stems.ll ? fromI16(saved.stems.ll) : null, leadR: saved.stems.lr ? fromI16(saved.stems.lr) : null } : null; document.querySelectorAll('[data-v]').forEach(b => b.classList.toggle('on', b.dataset.v === '0')); $('voclbl').textContent = 'full'; stemsUI();
     peaks = null;
     if (saved) { S.id = saved.id; S.semis = saved.semis || 0; S.tempo = saved.tempo || 1; S.loopA = saved.loopA ?? null; S.loopB = saved.loopB ?? null; S.loop = !!saved.loop; S.ref = saved.ref || null; setKey(S.semis, true); setSpeed(S.tempo * 100, true); saveSongSoon(); }
     else { S.id = null; setKey(0, true); setSpeed(100, true); saveSong(); }
@@ -936,7 +983,7 @@ function drawTrace(now) {
   tctx.fillStyle = css.getPropertyValue('--line'); tctx.fillRect(KEY_W, 0, 1, H);
   // ghost line: the reference take, aligned to song time and shifted with the key
   if (S.ref && S.ref.points.length && S.playing && S.outLen) {
-    const shift = S.semis - S.ref.semis, TWg = W - KEY_W, spanG = 8000;
+    const shift = S.semis - S.ref.semis + refOctave(), TWg = W - KEY_W, spanG = 8000;
     tctx.strokeStyle = 'rgba(238,240,246,0.35)'; tctx.lineWidth = 6; tctx.lineCap = 'round'; tctx.beginPath(); let on = false;
     for (let x = KEY_W; x <= W; x += 3) {
       const dt = (W - x) / TWg * spanG; const frac = (S.pos - dt / 1000 * S.sr) / S.outLen;
@@ -1072,10 +1119,10 @@ function analyseSession() {
   }
   if (S.ref && S.ref.points.length) {
     const withRef = L.filter(p => p.frac != null); let hit = 0, tot = 0, under = 0;
-    for (const p of withRef) { const m = refAt(p.frac); if (m == null) continue; tot++; const d = p.midi - (m + S.semis - S.ref.semis); if (Math.abs(d) <= 0.25) hit++; else if (d < 0) under++; }
+    for (const p of withRef) { const m = refAt(p.frac); if (m == null) continue; tot++; let d = p.midi - (m + S.semis - S.ref.semis); d = d - 12 * Math.round(d / 12); if (Math.abs(d) <= 0.25) hit++; else if (d < 0) under++; }
     $('stMatchBox').hidden = false;
     if (!tot) { $('stMatch').textContent = '—'; $('stMatchSub').textContent = 'play the song and sing'; }
-    else { const r = hit / tot; $('stMatch').textContent = r >= 0.8 ? 'on the line' : r >= 0.6 ? 'close' : r >= 0.4 ? 'drifting' : 'off the line'; $('stMatchSub').textContent = Math.round(r * 100) + '% within a quarter tone' + (tot - hit > 0 ? (under / (tot - hit) > 0.65 ? ', mostly under' : under / (tot - hit) < 0.35 ? ', mostly over' : '') : ''); }
+    else { const r = hit / tot; $('stMatch').textContent = r >= 0.8 ? 'on the line' : r >= 0.6 ? 'close' : r >= 0.4 ? 'drifting' : 'off the line'; $('stMatchSub').textContent = Math.round(r * 100) + '% within a quarter tone, any octave' + (tot - hit > 0 ? (under / (tot - hit) > 0.65 ? ', mostly under' : under / (tot - hit) < 0.35 ? ', mostly over' : '') : ''); }
   }
   // --- the coach: one thing that is working, one thing to work on, one concrete way to do it in Shed
   const notes = [];
@@ -1135,7 +1182,7 @@ function saveSongSoon() { clearTimeout(saveT); saveT = setTimeout(saveSong, 600)
 async function saveSong() {
   if (!S.file) return;
   if (!S.id) S.id = Date.now() + ':' + S.file.name;
-  const packed = S.stems ? { l: toI16(S.stems.L), r: toI16(S.stems.R) } : null;
+  const packed = S.stems ? { l: toI16(S.stems.L), r: toI16(S.stems.R), ll: S.stems.leadL ? toI16(S.stems.leadL) : null, lr: S.stems.leadR ? toI16(S.stems.leadR) : null } : null;
   await dbPut({ id: S.id, name: S.name, file: S.file, semis: S.semis, tempo: S.tempo, loopA: S.loopA, loopB: S.loopB, loop: S.loop, ref: S.ref, stems: packed, opened: Date.now() });
   const all = (await dbAll()).sort((a, b) => b.opened - a.opened);
   for (const old of all.slice(10)) await dbDel(old.id);
@@ -1189,6 +1236,8 @@ $('playTake').addEventListener('click', () => {
 });
 
 // ---------- Reference take: the melody as a ghost line, and the key finder ----------
+// The record's singer may be an octave away from the student: pick the octave that sits closest to what the student sings.
+function refOctave() { if (!S.ref || !S.ref.points.length) return 0; const vals = sessionLog.length > 40 ? sessionLog.slice(-400).map(p => p.midi) : null; if (!vals) return 0; const sm = pct(vals, 0.5); const rm = pct(S.ref.points.map(p => p.midi), 0.5) + (S.semis - S.ref.semis); return 12 * Math.round((sm - rm) / 12); }
 function refAt(frac) {
   const P = S.ref && S.ref.points; if (!P || !P.length) return null;
   let lo = 0, hi = P.length - 1;
@@ -1217,7 +1266,7 @@ $('refBtn').addEventListener('click', async () => {
 });
 function updateRefUI() {
   const kf = $('keyfind'); const hasRef = S.ref && S.ref.points.length;
-  $('refBtn').textContent = hasRef && !refRec ? 'Re-record reference' : 'Record reference';
+  $('refBtn').textContent = hasRef && !refRec ? (S.ref.auto ? 'Melody from the record ✓ · re-record' : 'Re-record reference') : 'Record reference';
   if (!hasRef && comfortTop == null) { kf.textContent = 'Tap the piano on your comfortable top note. With a reference take, Shed will suggest the key.'; return; }
   if (!hasRef) { kf.textContent = 'Comfortable top: ' + noteName(comfortTop) + '. Record a reference take of the melody and Shed will suggest the key.'; return; }
   const tops = S.ref.points.map(p => p.midi); const refTop = pct(tops, 0.97);
@@ -1405,51 +1454,70 @@ S.vocal = 0; S.srcFull = null; S.stems = null;
 const MODEL_PARTS = ['models/htdemucs.part0', 'models/htdemucs.part1'];
 let demucsLoading = null;
 function ensureDemucs() { if (window.ShedDemucs) return Promise.resolve(window.ShedDemucs); if (!demucsLoading) demucsLoading = new Promise((res, rej) => { const sc = document.createElement('script'); sc.src = 'demucs/shed-demucs.js'; sc.onload = () => res(window.ShedDemucs); sc.onerror = () => rej(new Error('engine missing')); document.head.appendChild(sc); }); return demucsLoading; }
+const KARA_MODEL = 'models/kara2.onnx', KARA_PARAMS = { nfft: 5120, compensate: 1.065 };
 async function separateVocals() {
   if (!S.src) return;
-  if (!navigator.gpu) { toast('AI separation needs a laptop or desktop browser with WebGPU: Chrome, Edge, or Safari 26. On the phone, separate once on your computer; the stems are saved with the song.'); return; }
+  if (!navigator.gpu) { toast('AI separation needs a laptop or desktop browser with WebGPU: Chrome, Edge, or Safari 26. Separate once on your computer; the stems are saved with the song.'); return; }
   let D; try { D = await ensureDemucs(); } catch (e) { toast('The separation engine could not load.'); return; }
   if (!S.srcFull) S.srcFull = S.src;
   const full = S.srcFull; const L = full[0], R = full[1] || full[0];
   const st = $('status'); const btn = $('sepBtn'); btn.disabled = true; st.classList.add('busy');
   const fmtLeft = (sec) => sec > 90 ? Math.round(sec / 60) + ' min left' : Math.round(sec) + ' s left';
+  const prog = (label) => (phase, f, left) => { if (phase === 'download') st.textContent = label + ' model ' + Math.round(f * 100) + '%'; else if (phase === 'compile') st.textContent = 'Preparing ' + label + '…'; else st.textContent = label + ' ' + Math.round(f * 100) + '%' + (left != null && f < 1 ? ' · ' + fmtLeft(left) : ''); };
   try {
     const t0 = performance.now();
-    const res = await D.separateVocals(L, R, S.sr, MODEL_PARTS, (phase, f, left) => {
-      if (phase === 'download') st.textContent = 'Model ' + Math.round(f * 100) + '% (174 MB, once)';
-      else if (phase === 'compile') st.textContent = 'Preparing model…';
-      else st.textContent = 'Separating ' + Math.round(f * 100) + '%' + (left != null && f < 1 ? ' · ' + fmtLeft(left) : '');
-    });
-    S.stems = { L: res.vocalsL, R: res.vocalsR };
-    $('vocalModes').hidden = false; $('sepRow').hidden = true;
-    $('stemHint').textContent = 'Separated in ' + Math.round((performance.now() - t0) / 1000) + ' s on this computer (' + (res.ep === 'webgpu' ? 'GPU' : 'CPU') + '). Saved with the song.';
+    const all = await D.separateVocals(L, R, S.sr, MODEL_PARTS, prog('All vocals'));
+    const kara = await D.separateKaraoke(L, R, S.sr, KARA_MODEL, KARA_PARAMS, prog('Lead vocal'));
+    // Karaoke 2 returns band + backing vocals; the lead is what is left
+    const n = L.length, leadL = new Float32Array(n), leadR = new Float32Array(n);
+    for (let i = 0; i < n; i++) { leadL[i] = L[i] - kara.L[i]; leadR[i] = R[i] - kara.R[i]; }
+    S.stems = { L: all.vocalsL, R: all.vocalsR, leadL, leadR };
+    stemsUI();
+    $('stemHint').textContent = 'Separated in ' + Math.round((performance.now() - t0) / 1000) + ' s on this computer (' + (all.ep === 'webgpu' ? 'GPU' : 'CPU') + '). Saved with the song.';
+    st.textContent = 'Reading the melody…';
+    await melodyFromLead();
     saveSongSoon(); setVocal(2);
-    toast('Vocals separated. Choose Quieter, Off, or Vocals only.');
+    toast('Done. Lead off keeps the backing vocals; the melody from the record is now the ghost line.');
   } catch (e) {
     console.error(e); st.textContent = 'Ready'; btn.disabled = false;
     toast('Separation failed: ' + (e.message || e) + '. Try again, or a shorter file.');
   } finally { st.classList.remove('busy'); if (S.ready && S.ready.every(Boolean)) st.textContent = 'Ready'; }
+}
+// Pitch-track the lead stem in the DSP worker and keep it as the reference (ghost line + match score)
+let melodyWorker = null;
+function melodyFromLead() {
+  return new Promise((res) => {
+    if (!S.stems || !S.stems.leadL) return res();
+    const n = S.stems.leadL.length, mono = new Float32Array(n); for (let i = 0; i < n; i++) mono[i] = 0.5 * (S.stems.leadL[i] + S.stems.leadR[i]);
+    if (!melodyWorker) melodyWorker = new Worker(dspURL);
+    const id = 'mel' + Date.now();
+    melodyWorker.onmessage = (e) => { if (e.data.id !== id) return; const pts = e.data.points.map(p => ({ frac: p.t / S.dur, midi: p.midi })).filter(p => p.frac >= 0 && p.frac <= 1);
+      if (pts.length > 20) { S.ref = { points: pts, semis: 0, auto: true }; updateRefUI(); } res(); };
+    melodyWorker.postMessage({ id, type: 'melody', x: mono, sr: S.sr }, [mono.buffer]);
+  });
 }
 $('sepBtn').addEventListener('click', separateVocals);
 function setVocal(level) {
   if (!S.src) return;
   if (!S.srcFull) S.srcFull = S.src;
   if (level && !S.stems) { toast('Separate the vocals first.'); level = 0; }
+  if ((level === 1 || level === 2 || level === 3) && S.stems && !S.stems.leadL) level = level === 3 ? 4 : 4; // old stems without a lead track
   S.vocal = level;
   document.querySelectorAll('[data-v]').forEach(b => b.classList.toggle('on', +b.dataset.v === level));
-  $('voclbl').textContent = ['full', 'quieter', 'off', 'vocals only'][level];
+  $('voclbl').textContent = ['full', 'lead −12 dB', 'lead off', 'lead only', 'band only'][level];
   if (!level) S.src = S.srcFull;
   else {
     const full = S.srcFull, L = full[0], R = full[1] || full[0], n = L.length, g = level === 1 ? 0.25 : 0;
     const oL = new Float32Array(n), oR = new Float32Array(n);
-    if (level === 3) { oL.set(S.stems.L.subarray(0, n)); oR.set(S.stems.R.subarray(0, n)); }
-    else for (let i = 0; i < n; i++) { oL[i] = L[i] - (1 - g) * S.stems.L[i]; oR[i] = R[i] - (1 - g) * S.stems.R[i]; }
+    const vL = level === 4 ? S.stems.L : S.stems.leadL, vR = level === 4 ? S.stems.R : S.stems.leadR;
+    if (level === 3) { oL.set(vL.subarray(0, n)); oR.set(vR.subarray(0, n)); }
+    else for (let i = 0; i < n; i++) { oL[i] = L[i] - (1 - g) * vL[i]; oR[i] = R[i] - (1 - g) * vR[i]; }
     S.src = [oL, oR];
   }
   peaks = null; rerender();
 }
 document.querySelectorAll('[data-v]').forEach(b => b.addEventListener('click', () => setVocal(+b.dataset.v)));
-function stemsUI() { const has = !!S.stems; $('vocalModes').hidden = !has; $('sepRow').hidden = has; $('sepBtn').disabled = !S.src; if (has) $('stemHint').textContent = 'Stems saved with this song.'; else $('stemHint').textContent = 'Demucs v4 runs on this computer; nothing is uploaded. Laptop or desktop with Chrome, Edge or Safari 26. About a minute per song, once.'; }
+function stemsUI() { const has = !!S.stems; $('vocalModes').hidden = !has; $('sepRow').hidden = has; $('sepBtn').disabled = !S.src; document.querySelectorAll('[data-v="1"],[data-v="2"],[data-v="3"]').forEach(b => b.disabled = !(has && S.stems.leadL)); if (has) $('stemHint').textContent = S.stems.leadL ? 'Stems saved with this song.' : 'Older stems: run the separation again for lead-vocal modes.'; else $('stemHint').textContent = 'Demucs v4 runs on this computer; nothing is uploaded. Laptop or desktop with Chrome, Edge or Safari 26. About a minute per song, once.'; }
 
 // ---------- Microphone: remember permission and start automatically next time ----------
 async function autoMic() {

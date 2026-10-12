@@ -16,6 +16,23 @@
         for (let i = 0; i < n; i += size) for (let j = i, k = 0; j < i + half; j++, k += step) { const c = cosT[k], s = inverse ? sinT[k] : -sinT[k]; const l = j + half; const tre = re[l] * c - im[l] * s, tim = re[l] * s + im[l] * c; re[l] = re[j] - tre; im[l] = im[j] - tim; re[j] += tre; im[j] += tim; } }
     };
   }
+
+  // FFT for N = m * 2^k with m in {1, 3, 5}: m sub-FFTs of size N/m (decimation in time) combined with twiddles.
+  function makeFFTmixed(N) {
+    let m = 1; for (const c of [5, 3]) if (N % c === 0 && Number.isInteger(Math.log2(N / c))) { m = c; break; }
+    if (m === 1) return makeFFT(N);
+    const P = N / m, sub = makeFFT(P);
+    const cosN = new Float32Array(N), sinN = new Float32Array(N); for (let i = 0; i < N; i++) { cosN[i] = Math.cos(2 * Math.PI * i / N); sinN[i] = Math.sin(2 * Math.PI * i / N); }
+    const sr = [], si = []; for (let r = 0; r < m; r++) { sr.push(new Float32Array(P)); si.push(new Float32Array(P)); }
+    return function (re, im, inverse) {
+      for (let r = 0; r < m; r++) { const a = sr[r], b = si[r]; for (let n = 0; n < P; n++) { a[n] = re[n * m + r]; b[n] = im[n * m + r]; } sub(a, b, inverse); }
+      for (let k = 0; k < N; k++) {
+        let xr = 0, xi = 0; const kk = k % P;
+        for (let r = 0; r < m; r++) { const idx = (r * k) % N; const c = cosN[idx], s2 = inverse ? sinN[idx] : -sinN[idx]; const ar = sr[r][kk], ai = si[r][kk]; xr += ar * c - ai * s2; xi += ar * s2 + ai * c; }
+        re[k] = xr; im[k] = xi;
+      }
+    };
+  }
   const fft = makeFFT(NFFT);
   const win = new Float32Array(NFFT); for (let i = 0; i < NFFT; i++) win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / NFFT);
 
@@ -114,18 +131,103 @@
     const wL = new Float32Array(T), wR = new Float32Array(T); for (let i = 0; i < T; i++) { wL[i] = (L[i] - mean) / std; wR[i] = (R[i] - mean) / std; }
     const vL = new Float32Array(T), vR = new Float32Array(T), ws = new Float32Array(T);
     const tri = new Float32Array(SEG); const h = SEG >> 1; for (let i = 0; i < h; i++) tri[i] = (i + 1) / h; for (let i = h; i < SEG; i++) tri[i] = (SEG - i) / (SEG - h);
-    const nSeg = Math.max(1, Math.ceil((T - SEG) / STRIDE) + 1); let k = 0; const t0 = performance.now();
-    for (let off = 0; off < T; off += STRIDE) {
-      const n = Math.min(SEG, T - off); const cL = new Float32Array(SEG), cR = new Float32Array(SEG); cL.set(wL.subarray(off, off + n)); cR.set(wR.subarray(off, off + n));
-      const r = await runSegment(sess, cL, cR);
-      for (let i = 0; i < n; i++) { vL[off + i] += r.vocalsL[i] * tri[i]; vR[off + i] += r.vocalsR[i] * tri[i]; ws[off + i] += tri[i]; }
+    const nSeg = Math.max(1, Math.ceil(Math.max(0, T - SEG) / STRIDE) + 1); let k = 0; const t0 = performance.now();
+    const ort = window.ort;
+    const prep = (off) => { const n = Math.min(SEG, T - off); const cL = new Float32Array(SEG), cR = new Float32Array(SEG); cL.set(wL.subarray(off, off + n)); cR.set(wR.subarray(off, off + n));
+      const { mean: m2, std: s2 } = stats(cL, cR); const d = 1e-5 + s2; const mix = new Float32Array(2 * SEG); for (let i = 0; i < SEG; i++) { mix[i] = (cL[i] - m2) / d; mix[SEG + i] = (cR[i] - m2) / d; }
+      const zcac = new Float32Array(4 * FQ * FRAMES); specInto(mix.subarray(0, SEG), zcac, 0, 1); specInto(mix.subarray(SEG), zcac, 2, 3);
+      return { off, n, mix, zcac, m2, d }; };
+    let cur = prep(0);
+    while (cur) {
+      const run = sess.run({ mix: new ort.Tensor('float32', cur.mix, [1, 2, SEG]), z_cac: new ort.Tensor('float32', cur.zcac, [1, 4, FQ, FRAMES]) });
+      const nextOff = cur.off + STRIDE; const nxt = (cur.off + SEG < T) ? prep(nextOff) : null;   // CPU work while the GPU runs
+      const res = await run; const timeOut = res.time_out.data, zout = res.zout_cac.data;
+      for (let c = 0; c < 2; c++) { const x = ispecFrom(zout, 3, c); const to = (3 * 2 + c) * SEG; const dst = c ? vR : vL; for (let i = 0; i < cur.n; i++) dst[cur.off + i] += ((x[i] + timeOut[to + i]) * cur.d + cur.m2) * tri[i]; }
+      for (let i = 0; i < cur.n; i++) ws[cur.off + i] += tri[i];
       k++; if (onProgress) { const el = (performance.now() - t0) / 1000; onProgress('separate', k / nSeg, el / k * (nSeg - k)); }
-      if (off + SEG >= T) break;
-      await new Promise(r2 => setTimeout(r2, 0));
+      cur = nxt; await new Promise(r2 => setTimeout(r2, 0));
     }
     for (let i = 0; i < T; i++) { const w = ws[i] || 1; vL[i] = vL[i] / w * std + mean; vR[i] = vR[i] / w * std + mean; }
     if (Math.abs(ratio - 1) > 1e-6) { const back = 1 / ratio; let oL = resample(vL, back), oR = resample(vR, back); const fixL = new Float32Array(inL.length), fixR = new Float32Array(inR.length); fixL.set(oL.subarray(0, Math.min(oL.length, inL.length))); fixR.set(oR.subarray(0, Math.min(oR.length, inR.length))); return { vocalsL: fixL, vocalsR: fixR, ep: sess._ep }; }
     return { vocalsL: vL, vocalsR: vR, ep: sess._ep };
   }
-  window.ShedDemucs = { separateVocals, getSession, stft, istft, specInto, ispecFrom, SEG, SR, canRun: () => !!navigator.gpu };
+
+  // ---------- UVR MDX-Net karaoke model: lead vocal vs everything else (backing vocals stay with the band) ----------
+  const MDX = { HOP: 1024, DIM_T: 256, DIM_F: 2048 };
+  const mdxCache = {};
+  function mdxTools(nfft) {
+    if (mdxCache[nfft]) return mdxCache[nfft];
+    const f = makeFFTmixed(nfft), w = new Float32Array(nfft); for (let i = 0; i < nfft; i++) w[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / nfft);
+    return (mdxCache[nfft] = { fft: f, win: w, half: nfft / 2 + 1 });
+  }
+  // chunk [2][chunk] → spek Float32Array [4][DIM_F][256], lowest 3 bins zeroed (as UVR does)
+  function mdxSpek(L, R, nfft) {
+    const { fft: f, win: w, half } = mdxTools(nfft); const T = MDX.DIM_T, F = MDX.DIM_F;
+    const out = new Float32Array(4 * F * T); const br = new Float32Array(nfft), bi = new Float32Array(nfft);
+    [L, R].forEach((x, c) => {
+      const xp = reflectPad(x, nfft / 2, nfft / 2);
+      for (let t = 0; t < T; t++) { const o = t * MDX.HOP; for (let i = 0; i < nfft; i++) { br[i] = xp[o + i] * w[i]; bi[i] = 0; } f(br, bi, false);
+        for (let k = 3; k < F; k++) { out[((c * 2) * F + k) * T + t] = br[k]; out[((c * 2 + 1) * F + k) * T + t] = bi[k]; } }
+    });
+    return out;
+  }
+  // spek [4][DIM_F][256] → [L, R] of length len (istft center=True with window-sum-square normalisation)
+  function mdxWave(spek, nfft, len) {
+    const { fft: f, win: w, half } = mdxTools(nfft); const T = MDX.DIM_T, F = MDX.DIM_F;
+    const outLen = nfft + MDX.HOP * (T - 1); const res = [];
+    const br = new Float32Array(nfft), bi = new Float32Array(nfft);
+    for (let c = 0; c < 2; c++) {
+      const y = new Float32Array(outLen), ws = new Float32Array(outLen);
+      for (let t = 0; t < T; t++) {
+        br.fill(0); bi.fill(0);
+        for (let k = 0; k < F; k++) { br[k] = spek[((c * 2) * F + k) * T + t]; bi[k] = spek[((c * 2 + 1) * F + k) * T + t]; }
+        for (let k = 1; k < half - 1; k++) { br[nfft - k] = br[k]; bi[nfft - k] = -bi[k]; }
+        f(br, bi, true); const o = t * MDX.HOP;
+        for (let i = 0; i < nfft; i++) { y[o + i] += br[i] / nfft * w[i]; ws[o + i] += w[i] * w[i]; }
+      }
+      const out = new Float32Array(len); for (let i = 0; i < len; i++) { const ww = ws[nfft / 2 + i]; out[i] = ww > 1e-8 ? y[nfft / 2 + i] / ww : 0; }
+      res.push(out);
+    }
+    return res;
+  }
+  let karaSession = null;
+  async function getKaraSession(modelUrl, onProgress) {
+    if (karaSession) return karaSession;
+    const ort = await ensureOrt();
+    const bytes = await fetchModel([modelUrl], (f) => onProgress && onProgress('download', f));
+    onProgress && onProgress('compile', 0);
+    karaSession = await ort.InferenceSession.create(bytes, { executionProviders: navigator.gpu ? ['webgpu', 'wasm'] : ['wasm'], graphOptimizationLevel: 'all' });
+    karaSession._ep = navigator.gpu ? 'webgpu' : 'wasm';
+    return karaSession;
+  }
+  // Returns the model's primary stem at the input sample rate. For Karaoke 2 the primary stem is
+  // "instrumental + backing vocals"; lead vocal = mix − that.
+  async function separateKaraoke(inL, inR, sr, modelUrl, params, onProgress) {
+    const sess = await getKaraSession(modelUrl, onProgress); const ort = window.ort;
+    const nfft = params.nfft, comp = params.compensate, overlap = 0.25;
+    let L = inL, R = inR; const ratio = sr / SR; if (Math.abs(ratio - 1) > 1e-6) { L = resample(inL, ratio); R = resample(inR, ratio); }
+    const T = L.length, chunk = MDX.HOP * (MDX.DIM_T - 1), trim = nfft >> 1, step = Math.floor(chunk * (1 - overlap));
+    const padLen = trim + T + chunk; const mL = new Float32Array(padLen), mR = new Float32Array(padLen); mL.set(L, trim); mR.set(R, trim);
+    const rL = new Float32Array(padLen), rR = new Float32Array(padLen), div = new Float32Array(padLen);
+    const win = new Float32Array(chunk); for (let i = 0; i < chunk; i++) win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / chunk);
+    const nChunks = Math.ceil((trim + T) / step); let k = 0; const t0 = performance.now();
+    // CPU/GPU pipelining: prepare chunk k+1 while the GPU runs chunk k
+    let next = (i) => { const cL = mL.subarray(i, i + chunk), cR = mR.subarray(i, i + chunk); return mdxSpek(cL, cR, nfft); };
+    let pending = null, pendingI = 0;
+    for (let i = 0; i < trim + T; i += step) {
+      const spek = pending && pendingI === i ? pending : next(i);
+      const run = sess.run({ input: new ort.Tensor('float32', spek, [1, 4, MDX.DIM_F, MDX.DIM_T]) });
+      const ni = i + step; if (ni < trim + T) { pending = next(ni); pendingI = ni; } else pending = null;
+      const res = await run; const out = res.output.data;
+      const wav = mdxWave(out, nfft, chunk); const n = Math.min(chunk, padLen - i);
+      for (let j = 0; j < n; j++) { rL[i + j] += wav[0][j] * win[j]; rR[i + j] += wav[1][j] * win[j]; div[i + j] += win[j]; }
+      k++; if (onProgress) { const el = (performance.now() - t0) / 1000; onProgress('separate', k / nChunks, el / k * (nChunks - k)); }
+      await new Promise(r => setTimeout(r, 0));
+    }
+    const oL = new Float32Array(T), oR = new Float32Array(T);
+    for (let i = 0; i < T; i++) { const d = div[trim + i] || 1; oL[i] = rL[trim + i] / d * comp; oR[i] = rR[trim + i] / d * comp; }
+    if (Math.abs(ratio - 1) > 1e-6) { const back = 1 / ratio; const bL = resample(oL, back), bR = resample(oR, back); const fL = new Float32Array(inL.length), fR = new Float32Array(inR.length); fL.set(bL.subarray(0, Math.min(bL.length, fL.length))); fR.set(bR.subarray(0, Math.min(bR.length, fR.length))); return { L: fL, R: fR, ep: sess._ep }; }
+    return { L: oL, R: oR, ep: sess._ep };
+  }
+  window.ShedDemucs = { separateKaraoke, mdxSpek, mdxWave, makeFFTmixed, separateVocals, getSession, stft, istft, specInto, ispecFrom, SEG, SR, canRun: () => !!navigator.gpu };
 })();

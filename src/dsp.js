@@ -118,6 +118,10 @@ if (typeof module !== 'undefined') module.exports = { makeFFT, timeStretch, resa
 // Returns the rendered samples for the chunk with the padding removed (padIn/tempo on each side).
 if (typeof self !== 'undefined' && typeof importScripts === 'function') {
   self.onmessage = (e) => {
+    if (e.data.type === 'melody') {
+      const { id, x, sr } = e.data; const pts = trackMelody(x, sr);
+      self.postMessage({ id, type: 'melody', points: pts }); return;
+    }
     if (e.data.type === 'vocal') {
       const { id, L, R, sr, strength } = e.data;
       const out = reduceVocals(L, R, sr, strength, (f) => self.postMessage({ id, type: 'vocal', progress: f }));
@@ -223,3 +227,46 @@ function reduceVocals(L, R, sr, strength, onProgress) {
   return [outL, outR];
 }
 if (typeof module !== 'undefined') { module.exports.reduceVocals = reduceVocals; module.exports.stft = stft; }
+
+// ---------- Melody tracker: pitch of a (separated) lead vocal, offline, whole song ----------
+// Normalised-square-difference (McLeod) via FFT autocorrelation, vocal range 70–1200 Hz,
+// voicing by clarity + energy, median smoothing, octave-jump suppression. Returns [{t, midi}] with t in seconds.
+function trackMelody(x, sr, opts = {}) {
+  const N = 2048, H = opts.hop || 512, M = 4096, fft = makeFFT(M);
+  const fLo = 70, fHi = 1200, lagMin = Math.floor(sr / fHi), lagMax = Math.min(N - 1, Math.ceil(sr / fLo));
+  const re = new Float32Array(M), im = new Float32Array(M);
+  const nFr = Math.max(0, Math.floor((x.length - N) / H) + 1);
+  // global energy reference for voicing
+  let gl = 0; for (let i = 0; i < x.length; i++) gl += x[i] * x[i]; const gRms = Math.sqrt(gl / Math.max(1, x.length));
+  const raw = new Float32Array(nFr).fill(-1), clar = new Float32Array(nFr), ener = new Float32Array(nFr);
+  const cum = new Float64Array(N + 1);
+  for (let f = 0; f < nFr; f++) {
+    const o = f * H; let e = 0; for (let i = 0; i < N; i++) { const v = x[o + i]; re[i] = v; im[i] = 0; e += v * v; } for (let i = N; i < M; i++) { re[i] = 0; im[i] = 0; }
+    ener[f] = Math.sqrt(e / N); if (ener[f] < 0.06 * gRms || ener[f] < 1e-4) continue;
+    fft(re, im, false); for (let i = 0; i < M; i++) { re[i] = re[i] * re[i] + im[i] * im[i]; im[i] = 0; } fft(re, im, true);
+    cum[0] = 0; for (let i = 0; i < N; i++) cum[i + 1] = cum[i] + x[o + i] * x[o + i];
+    // nsdf(tau) = 2*acf(tau) / (E[0..N-tau] + E[tau..N])
+    let maxV = 0; const nsdf = new Float32Array(lagMax + 1);
+    for (let tau = lagMin; tau <= lagMax; tau++) { const acf = re[tau] / M; const m = (cum[N - tau] - cum[0]) + (cum[N] - cum[tau]); nsdf[tau] = m > 0 ? 2 * acf / m : 0; if (nsdf[tau] > maxV) maxV = nsdf[tau]; }
+    if (maxV < 0.6) continue;
+    // first peak above 0.85*max (avoids octave-down errors), parabolic refinement
+    const thr = Math.max(0.6, maxV * 0.85); let best = -1;
+    for (let tau = lagMin + 1; tau < lagMax; tau++) if (nsdf[tau] > nsdf[tau - 1] && nsdf[tau] >= nsdf[tau + 1] && nsdf[tau] > thr) { best = tau; break; }
+    if (best < 0) continue;
+    const a = nsdf[best - 1], b = nsdf[best], c = nsdf[best + 1]; const den = (a - 2 * b + c); const shift = den ? (a - c) / (2 * den) : 0;
+    const f0 = sr / (best + shift); raw[f] = 69 + 12 * Math.log2(f0 / 440); clar[f] = b;
+  }
+  // octave-jump suppression against a running median, then 5-frame median smoothing
+  const out = new Float32Array(nFr).fill(-1); let prev = -1;
+  // only undo a brief octave glitch: a jump of ~12 that lasts under 80 ms and comes back
+  for (let f = 0; f < nFr; f++) out[f] = raw[f];
+  const glitch = Math.ceil(0.08 * sr / H);
+  for (let f = 1; f < nFr - 1; f++) { if (out[f] < 0 || out[f - 1] < 0) continue; const d = out[f] - out[f - 1]; if (Math.abs(Math.abs(d) - 12) > 0.3) continue; let g = f; while (g < nFr && g - f < glitch && out[g] >= 0 && Math.abs((out[g] - out[f - 1]) - d) < 0.6) g++; if (g < nFr && g - f < glitch && out[g] >= 0 && Math.abs(out[g] - out[f - 1]) < 0.6) for (let q = f; q < g; q++) out[q] -= d; }
+  const sm = new Float32Array(nFr).fill(-1);
+  for (let f = 0; f < nFr; f++) { if (out[f] < 0) continue; const w = []; for (let d = -2; d <= 2; d++) { const g = f + d; if (g >= 0 && g < nFr && out[g] >= 0) w.push(out[g]); } w.sort((p, q) => p - q); sm[f] = w[w.length >> 1]; }
+  // drop voiced islands shorter than 60 ms
+  const minFr = Math.ceil(0.06 * sr / H); const pts = []; let start = -1;
+  for (let f = 0; f <= nFr; f++) { const v = f < nFr && sm[f] >= 0; if (v && start < 0) start = f; if (!v && start >= 0) { if (f - start >= minFr) for (let g = start; g < f; g++) pts.push({ t: (g * H + N / 2) / sr, midi: sm[g] }); start = -1; } }
+  return pts;
+}
+if (typeof module !== 'undefined') module.exports.trackMelody = trackMelody;
