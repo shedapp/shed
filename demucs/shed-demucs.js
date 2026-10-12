@@ -3,7 +3,7 @@
 // and apply_model's 7.8 s windows with 25 % overlap and triangular weights. Runs on WebGPU via onnxruntime-web.
 (function () {
   const SR = 44100, SEG = 343980, NFFT = 4096, HOP = 1024, STRIDE = 257985, HALF = NFFT / 2 + 1, FQ = 2048, FRAMES = 336, SQ = Math.sqrt(NFFT);
-  const ORT_VERSION = '1.20.1';
+  const ORT_VERSION = '1.22.0';
   const ORT_BASE = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@' + ORT_VERSION + '/dist/';
 
   function makeFFT(n) {
