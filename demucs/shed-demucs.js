@@ -1,11 +1,15 @@
-// Shed — in-browser HT-Demucs v4 (Meta AI) host pipeline for the static ONNX graph.
-// Mirrors demucs/htdemucs.py: per-segment normalisation, _spec (STFT → complex-as-channels), _ispec,
-// and apply_model's 7.8 s windows with 25 % overlap and triangular weights. Runs on WebGPU via onnxruntime-web.
-(function () {
-  const SR = 44100, SEG = 343980, NFFT = 4096, HOP = 1024, STRIDE = 257985, HALF = NFFT / 2 + 1, FQ = 2048, FRAMES = 336, SQ = Math.sqrt(NFFT);
-  const ORT_VERSION = '1.22.0';
-  const ORT_BASE = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@' + ORT_VERSION + '/dist/';
+// Shed stems engine — on-device source separation.
+//  • HT-Demucs v4 (Meta AI, MIT): all vocals vs band. Static ONNX graph; host pipeline mirrors demucs/htdemucs.py.
+//  • UVR MDX-Net Karaoke 2 (Ultimate Vocal Remover, MIT): band + backing vocals vs lead vocal.
+// Neural nets run through onnxruntime-web on WebGPU; all spectrogram math runs in a pool of Web Workers
+// in parallel with the GPU. This file is loaded both on the page and inside those workers.
+(function (root) {
+  const SR = 44100, SEG = 343980, NFFT = 4096, HOP = 1024, STRIDE = 257985, HALF = NFFT / 2 + 1, FQ = 2048, FRAMES = 336;
+  const MDX = { HOP: 1024, DIM_T: 256, DIM_F: 2048 };
+  const ORT_VERSION = '1.22.0', ORT_BASE = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@' + ORT_VERSION + '/dist/';
+  const inWorker = typeof importScripts === 'function';
 
+  // ---------- FFT: radix-2, plus N = m·2^k (m = 3 or 5) for the karaoke model ----------
   function makeFFT(n) {
     const levels = Math.log2(n) | 0; const cosT = new Float32Array(n / 2), sinT = new Float32Array(n / 2);
     for (let i = 0; i < n / 2; i++) { cosT[i] = Math.cos(2 * Math.PI * i / n); sinT[i] = Math.sin(2 * Math.PI * i / n); }
@@ -16,8 +20,6 @@
         for (let i = 0; i < n; i += size) for (let j = i, k = 0; j < i + half; j++, k += step) { const c = cosT[k], s = inverse ? sinT[k] : -sinT[k]; const l = j + half; const tre = re[l] * c - im[l] * s, tim = re[l] * s + im[l] * c; re[l] = re[j] - tre; im[l] = im[j] - tim; re[j] += tre; im[j] += tim; } }
     };
   }
-
-  // FFT for N = m * 2^k with m in {1, 3, 5}: m sub-FFTs of size N/m (decimation in time) combined with twiddles.
   function makeFFTmixed(N) {
     let m = 1; for (const c of [5, 3]) if (N % c === 0 && Number.isInteger(Math.log2(N / c))) { m = c; break; }
     if (m === 1) return makeFFT(N);
@@ -26,208 +28,190 @@
     const sr = [], si = []; for (let r = 0; r < m; r++) { sr.push(new Float32Array(P)); si.push(new Float32Array(P)); }
     return function (re, im, inverse) {
       for (let r = 0; r < m; r++) { const a = sr[r], b = si[r]; for (let n = 0; n < P; n++) { a[n] = re[n * m + r]; b[n] = im[n * m + r]; } sub(a, b, inverse); }
-      for (let k = 0; k < N; k++) {
-        let xr = 0, xi = 0; const kk = k % P;
-        for (let r = 0; r < m; r++) { const idx = (r * k) % N; const c = cosN[idx], s2 = inverse ? sinN[idx] : -sinN[idx]; const ar = sr[r][kk], ai = si[r][kk]; xr += ar * c - ai * s2; xi += ar * s2 + ai * c; }
-        re[k] = xr; im[k] = xi;
-      }
+      for (let k = 0; k < N; k++) { let xr = 0, xi = 0; const kk = k % P; let idx = 0;
+        for (let r = 0; r < m; r++) { const c = cosN[idx], s2 = inverse ? sinN[idx] : -sinN[idx]; const ar = sr[r][kk], ai = si[r][kk]; xr += ar * c - ai * s2; xi += ar * s2 + ai * c; idx += k; if (idx >= N) idx -= N; }
+        re[k] = xr; im[k] = xi; }
     };
   }
-  const fft = makeFFT(NFFT);
-  const win = new Float32Array(NFFT); for (let i = 0; i < NFFT; i++) win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / NFFT);
+  const fftCache = {}; const getFFT = (n) => fftCache[n] || (fftCache[n] = makeFFTmixed(n));
+  const winCache = {}; const getWin = (n) => winCache[n] || (winCache[n] = (() => { const w = new Float32Array(n); for (let i = 0; i < n; i++) w[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / n); return w; })());
 
   function reflectPad(x, left, right) {
-    const n = x.length, out = new Float32Array(n + left + right);
-    out.set(x, left);
+    const n = x.length, out = new Float32Array(n + left + right); out.set(x, left);
     for (let i = 0; i < left; i++) out[left - 1 - i] = x[i + 1];
     for (let i = 0; i < right; i++) out[left + n + i] = x[n - 2 - i];
     return out;
   }
-  // torch.stft(center=True, normalized=True, pad_mode='reflect'); frame-major [t*HALF + k]
-  function stft(x) {
-    const xp = reflectPad(x, NFFT / 2, NFFT / 2); const nfr = 1 + Math.floor((xp.length - NFFT) / HOP);
-    const re = new Float32Array(nfr * HALF), im = new Float32Array(nfr * HALF), br = new Float32Array(NFFT), bi = new Float32Array(NFFT);
-    for (let t = 0; t < nfr; t++) { const o = t * HOP; for (let i = 0; i < NFFT; i++) { br[i] = xp[o + i] * win[i]; bi[i] = 0; } fft(br, bi, false); for (let k = 0; k < HALF; k++) { re[t * HALF + k] = br[k] / SQ; im[t * HALF + k] = bi[k] / SQ; } }
-    return { re, im, nfr };
-  }
-  // torch.istft(center=True, normalized=True) with window-sum-square normalisation
-  function istft(re, im, nfr, length) {
-    const outLen = NFFT + HOP * (nfr - 1), y = new Float32Array(outLen), ws = new Float32Array(outLen), br = new Float32Array(NFFT), bi = new Float32Array(NFFT);
+  // Two real channels per complex FFT: X = FFT(a + i·b); A[k] = (X[k] + conj(X[N-k]))/2, B[k] = (X[k] - conj(X[N-k]))/(2i)
+  // Forward STFT of a stereo pair → frame-major spectra [t*half + k] per channel. torch.stft(center=True, reflect).
+  function stft2(a, b, nfft, hop, norm) {
+    const fft = getFFT(nfft), win = getWin(nfft), half = nfft / 2 + 1;
+    const ap = reflectPad(a, nfft / 2, nfft / 2), bp = reflectPad(b, nfft / 2, nfft / 2);
+    const nfr = 1 + Math.floor((ap.length - nfft) / hop);
+    const Ar = new Float32Array(nfr * half), Ai = new Float32Array(nfr * half), Br = new Float32Array(nfr * half), Bi = new Float32Array(nfr * half);
+    const re = new Float32Array(nfft), im = new Float32Array(nfft); const s = norm ? 1 / Math.sqrt(nfft) : 1;
     for (let t = 0; t < nfr; t++) {
-      for (let k = 0; k < HALF; k++) { br[k] = re[t * HALF + k]; bi[k] = im[t * HALF + k]; }
-      for (let k = 1; k < HALF - 1; k++) { br[NFFT - k] = br[k]; bi[NFFT - k] = -bi[k]; }
-      fft(br, bi, true); const o = t * HOP;
-      for (let i = 0; i < NFFT; i++) { y[o + i] += br[i] / NFFT * SQ * win[i]; ws[o + i] += win[i] * win[i]; }
+      const o = t * hop; for (let i = 0; i < nfft; i++) { const w = win[i]; re[i] = ap[o + i] * w; im[i] = bp[o + i] * w; }
+      fft(re, im, false); const base = t * half;
+      for (let k = 0; k < half; k++) { const j = (nfft - k) % nfft; const xr = re[k], xi = im[k], yr = re[j], yi = -im[j];
+        Ar[base + k] = 0.5 * (xr + yr) * s; Ai[base + k] = 0.5 * (xi + yi) * s;
+        Br[base + k] = 0.5 * (xi - yi) * s; Bi[base + k] = -0.5 * (xr - yr) * s; }
     }
-    const out = new Float32Array(length); for (let i = 0; i < length; i++) { const w = ws[NFFT / 2 + i]; out[i] = w > 1e-8 ? y[NFFT / 2 + i] / w : 0; }
+    return { Ar, Ai, Br, Bi, nfr, half };
+  }
+  // Inverse STFT of two channels at once: IFFT(A + i·B) gives a in re and b in im (both real).
+  function istft2(Ar, Ai, Br, Bi, nfr, nfft, hop, norm, length) {
+    const fft = getFFT(nfft), win = getWin(nfft), half = nfft / 2 + 1;
+    const outLen = nfft + hop * (nfr - 1), ya = new Float32Array(outLen), yb = new Float32Array(outLen), ws = new Float32Array(outLen);
+    const re = new Float32Array(nfft), im = new Float32Array(nfft); const s = (norm ? Math.sqrt(nfft) : 1) / nfft;
+    for (let t = 0; t < nfr; t++) {
+      const base = t * half;
+      for (let k = 0; k < half; k++) { re[k] = Ar[base + k] - Bi[base + k]; im[k] = Ai[base + k] + Br[base + k]; }
+      for (let k = 1; k < half - 1; k++) { const j = nfft - k; re[j] = Ar[base + k] + Bi[base + k]; im[j] = -Ai[base + k] + Br[base + k]; }
+      fft(re, im, true); const o = t * hop;
+      for (let i = 0; i < nfft; i++) { const w = win[i]; ya[o + i] += re[i] * s * w; yb[o + i] += im[i] * s * w; ws[o + i] += w * w; }
+    }
+    const a = new Float32Array(length), b = new Float32Array(length); const off = nfft / 2;
+    for (let i = 0; i < length; i++) { const w = ws[off + i]; if (w > 1e-8) { a[i] = ya[off + i] / w; b[i] = yb[off + i] / w; } }
+    return [a, b];
+  }
+
+  // ---------- Demucs host math (pure; runs in workers) ----------
+  function stats2(L, R) { let m = 0; const n = L.length; for (let i = 0; i < n; i++) m += L[i] + R[i]; m /= 2 * n; let v = 0; for (let i = 0; i < n; i++) { const a = L[i] - m, b = R[i] - m; v += a * a + b * b; } return { mean: m, std: Math.sqrt(v / (2 * n - 1)) }; }
+  // segment (SEG samples each, already track-normalised) → {mix [2*SEG], zcac [4*FQ*FRAMES], m2, d}
+  function demucsPrep(cL, cR) {
+    const { mean: m2, std: s2 } = stats2(cL, cR); const d = 1e-5 + s2;
+    const mix = new Float32Array(2 * SEG); for (let i = 0; i < SEG; i++) { mix[i] = (cL[i] - m2) / d; mix[SEG + i] = (cR[i] - m2) / d; }
+    const pad = HOP / 2 * 3;
+    const S = stft2(reflectPad(mix.subarray(0, SEG), pad, pad + FRAMES * HOP - SEG), reflectPad(mix.subarray(SEG), pad, pad + FRAMES * HOP - SEG), NFFT, HOP, true);
+    const zcac = new Float32Array(4 * FQ * FRAMES);
+    for (let t = 0; t < FRAMES; t++) { const src = (t + 2) * HALF; for (let k = 0; k < FQ; k++) { zcac[(0 * FQ + k) * FRAMES + t] = S.Ar[src + k]; zcac[(1 * FQ + k) * FRAMES + t] = S.Ai[src + k]; zcac[(2 * FQ + k) * FRAMES + t] = S.Br[src + k]; zcac[(3 * FQ + k) * FRAMES + t] = S.Bi[src + k]; } }
+    return { mix, zcac, m2, d };
+  }
+  // vocals planes of zout [4 planes][FQ][FRAMES] + vocals time_out [2][SEG] → de-normalised stereo vocals of the segment
+  function demucsPost(zv, tv, m2, d) {
+    const nfr = FRAMES + 4, Ar = new Float32Array(nfr * HALF), Ai = new Float32Array(nfr * HALF), Br = new Float32Array(nfr * HALF), Bi = new Float32Array(nfr * HALF);
+    const P = FQ * FRAMES;
+    for (let k = 0; k < FQ; k++) for (let t = 0; t < FRAMES; t++) { const dst = (t + 2) * HALF + k, srcI = k * FRAMES + t; Ar[dst] = zv[srcI]; Ai[dst] = zv[P + srcI]; Br[dst] = zv[2 * P + srcI]; Bi[dst] = zv[3 * P + srcI]; }
+    const pad = HOP / 2 * 3, le = HOP * FRAMES + 2 * pad;
+    const [xa, xb] = istft2(Ar, Ai, Br, Bi, nfr, NFFT, HOP, true, le);
+    const oL = new Float32Array(SEG), oR = new Float32Array(SEG);
+    for (let i = 0; i < SEG; i++) { oL[i] = (xa[pad + i] + tv[i]) * d + m2; oR[i] = (xb[pad + i] + tv[SEG + i]) * d + m2; }
+    return [oL, oR];
+  }
+  // ---------- MDX host math (pure) ----------
+  function mdxSpek(L, R, nfft) {
+    const T = MDX.DIM_T, F = MDX.DIM_F; const S = stft2(L, R, nfft, MDX.HOP, false);
+    const out = new Float32Array(4 * F * T);
+    for (let t = 0; t < T; t++) { const b = t * S.half; for (let k = 3; k < F; k++) { out[(0 * F + k) * T + t] = S.Ar[b + k]; out[(1 * F + k) * T + t] = S.Ai[b + k]; out[(2 * F + k) * T + t] = S.Br[b + k]; out[(3 * F + k) * T + t] = S.Bi[b + k]; } }
     return out;
   }
-  // demucs _spec for one channel → writes real/imag planes into z_cac at channel slots cr, ci (layout [4][2048][336])
-  function specInto(x, zcac, cr, ci) {
-    const le = FRAMES, pad = HOP / 2 * 3;
-    const xp = reflectPad(x, pad, pad + le * HOP - SEG);
-    const S = stft(xp);
-    for (let t = 0; t < le; t++) for (let k = 0; k < FQ; k++) { const src = (t + 2) * HALF + k; zcac[(cr * FQ + k) * FRAMES + t] = S.re[src]; zcac[(ci * FQ + k) * FRAMES + t] = S.im[src]; }
+  function mdxWave(spek, nfft, len) {
+    const T = MDX.DIM_T, F = MDX.DIM_F, half = nfft / 2 + 1;
+    const Ar = new Float32Array(T * half), Ai = new Float32Array(T * half), Br = new Float32Array(T * half), Bi = new Float32Array(T * half);
+    for (let t = 0; t < T; t++) { const b = t * half; for (let k = 0; k < F; k++) { Ar[b + k] = spek[(0 * F + k) * T + t]; Ai[b + k] = spek[(1 * F + k) * T + t]; Br[b + k] = spek[(2 * F + k) * T + t]; Bi[b + k] = spek[(3 * F + k) * T + t]; } }
+    return istft2(Ar, Ai, Br, Bi, T, nfft, MDX.HOP, false, len);
   }
-  // demucs _ispec for one (source, channel): zout layout [4 src][4 planes][2048][336] → time signal of SEG samples
-  function ispecFrom(zout, s, c) {
-    const nfr = FRAMES + 4, re = new Float32Array(nfr * HALF), im = new Float32Array(nfr * HALF);
-    const pr = ((s * 4 + c * 2) * FQ) * FRAMES, pi = ((s * 4 + c * 2 + 1) * FQ) * FRAMES;
-    for (let k = 0; k < FQ; k++) for (let t = 0; t < FRAMES; t++) { re[(t + 2) * HALF + k] = zout[pr + k * FRAMES + t]; im[(t + 2) * HALF + k] = zout[pi + k * FRAMES + t]; }
-    const pad = HOP / 2 * 3, le = HOP * FRAMES + 2 * pad;
-    const x = istft(re, im, nfr, le);
-    return x.subarray(pad, pad + SEG);
-  }
-  function stats(L, R) { let m = 0; const n = L.length; for (let i = 0; i < n; i++) m += L[i] + R[i]; m /= 2 * n; let v = 0; for (let i = 0; i < n; i++) { const a = L[i] - m, b = R[i] - m; v += a * a + b * b; } return { mean: m, std: Math.sqrt(v / (2 * n - 1)) }; }
   function resample(input, ratio) { const outLen = Math.floor(input.length / ratio), out = new Float32Array(outLen), n = input.length; for (let i = 0; i < outLen; i++) { const x = i * ratio; const j = x | 0; const t = x - j; const y0 = input[j - 1 < 0 ? 0 : j - 1], y1 = input[j], y2 = input[j + 1 < n ? j + 1 : n - 1], y3 = input[j + 2 < n ? j + 2 : n - 1]; const a = (3 * (y1 - y2) - y0 + y3) / 2, b = 2 * y2 + y0 - (5 * y1 + y3) / 2, c = (y2 - y0) / 2; out[i] = ((a * t + b) * t + c) * t + y1; } return out; }
 
-  let ortLoading = null, session = null;
-  function loadScript(src) { return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error('Could not load ' + src)); document.head.appendChild(s); }); }
-  async function ensureOrt() {
-    if (window.ort) return window.ort;
-    if (!ortLoading) ortLoading = loadScript(ORT_BASE + 'ort.webgpu.min.js').then(() => { window.ort.env.wasm.wasmPaths = ORT_BASE; return window.ort; });
-    return ortLoading;
+  const api = { demucsPrep, demucsPost, mdxSpek, mdxWave, makeFFTmixed, stft2, istft2, SEG, SR };
+
+  // ---------- Worker side ----------
+  if (inWorker) {
+    self.onmessage = (e) => {
+      const { id, op } = e.data; let r, tr = [];
+      if (op === 'demucsPrep') { r = demucsPrep(e.data.L, e.data.R); tr = [r.mix.buffer, r.zcac.buffer]; }
+      else if (op === 'demucsPost') { const [a, b] = demucsPost(e.data.zv, e.data.tv, e.data.m2, e.data.d); r = { L: a, R: b }; tr = [a.buffer, b.buffer]; }
+      else if (op === 'mdxSpek') { const s = mdxSpek(e.data.L, e.data.R, e.data.nfft); r = { spek: s }; tr = [s.buffer]; }
+      else if (op === 'mdxWave') { const [a, b] = mdxWave(e.data.spek, e.data.nfft, e.data.len); r = { L: a, R: b }; tr = [a.buffer, b.buffer]; }
+      self.postMessage({ id, r }, tr);
+    };
+    root.ShedDemucs = api; return;
   }
+  if (typeof document === 'undefined') { root.ShedDemucs = api; return; }   // node tests
+
+  // ---------- Page side: worker pool + onnxruntime ----------
+  const selfUrl = (document.currentScript && document.currentScript.src) || 'demucs/shed-demucs.js';
+  const pool = { workers: [], next: 0, pending: new Map(), seq: 0 };
+  function poolSize() { return Math.max(2, Math.min(4, (navigator.hardwareConcurrency || 4) - 1)); }
+  function ensurePool() {
+    if (pool.workers.length) return;
+    for (let i = 0; i < poolSize(); i++) {
+      const w = new Worker(selfUrl);
+      w.onmessage = (e) => { const p = pool.pending.get(e.data.id); if (p) { pool.pending.delete(e.data.id); p(e.data.r); } };
+      pool.workers.push(w);
+    }
+  }
+  function job(op, data, transfer) { ensurePool(); const id = ++pool.seq; const w = pool.workers[pool.next++ % pool.workers.length]; return new Promise((res) => { pool.pending.set(id, res); w.postMessage(Object.assign({ id, op }, data), transfer || []); }); }
+
+  let ortLoading = null;
+  function loadScript(src) { return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error('Could not load ' + src)); document.head.appendChild(s); }); }
+  async function ensureOrt() { if (root.ort) return root.ort; if (!ortLoading) ortLoading = loadScript(ORT_BASE + 'ort.webgpu.min.js').then(() => { root.ort.env.wasm.wasmPaths = ORT_BASE; return root.ort; }); return ortLoading; }
   async function fetchModel(parts, onProgress) {
-    // the weights are stored as two files under 100 MB each; concatenate them
     const bufs = []; let total = 0, done = 0;
     const heads = await Promise.all(parts.map(p => fetch(p, { method: 'HEAD' }).catch(() => null)));
     for (const h of heads) total += h && h.ok ? +(h.headers.get('content-length') || 0) : 0;
-    for (const p of parts) {
-      const r = await fetch(p); if (!r.ok) throw new Error('Model file missing: ' + p);
-      const reader = r.body.getReader(); const chunks = [];
-      while (true) { const { done: d, value } = await reader.read(); if (d) break; chunks.push(value); done += value.length; if (onProgress && total) onProgress(done / total); }
-      bufs.push(...chunks);
-    }
-    const out = new Uint8Array(done); let o = 0; for (const c of bufs) { out.set(c, o); o += c.length; }
-    return out;
+    for (const p of parts) { const r = await fetch(p); if (!r.ok) throw new Error('Model file missing: ' + p); const reader = r.body.getReader();
+      while (true) { const { done: d, value } = await reader.read(); if (d) break; bufs.push(value); done += value.length; if (onProgress && total) onProgress(done / total); } }
+    const out = new Uint8Array(done); let o = 0; for (const c of bufs) { out.set(c, o); o += c.length; } return out;
   }
-  async function getSession(modelParts, onProgress) {
-    if (session) return session;
-    const ort = await ensureOrt();
-    const bytes = await fetchModel(modelParts, (f) => onProgress && onProgress('download', f));
+  const sessions = {};
+  async function getSession(key, parts, onProgress) {
+    if (sessions[key]) return sessions[key];
+    const ort = await ensureOrt(); const bytes = await fetchModel(parts, (f) => onProgress && onProgress('download', f));
     onProgress && onProgress('compile', 0);
-    const providers = navigator.gpu ? ['webgpu', 'wasm'] : ['wasm'];
-    session = await ort.InferenceSession.create(bytes, { executionProviders: providers, graphOptimizationLevel: 'all' });
-    session._ep = navigator.gpu ? 'webgpu' : 'wasm';
-    return session;
+    const s = await ort.InferenceSession.create(bytes, { executionProviders: navigator.gpu ? ['webgpu', 'wasm'] : ['wasm'], graphOptimizationLevel: 'all' });
+    s._ep = navigator.gpu ? 'webgpu' : 'wasm'; sessions[key] = s; return s;
   }
-  async function runSegment(sess, L, R) {
-    const ort = window.ort; const { mean, std } = stats(L, R); const d = 1e-5 + std;
-    const mix = new Float32Array(2 * SEG); for (let i = 0; i < SEG; i++) { mix[i] = (L[i] - mean) / d; mix[SEG + i] = (R[i] - mean) / d; }
-    const zcac = new Float32Array(4 * FQ * FRAMES);
-    specInto(mix.subarray(0, SEG), zcac, 0, 1); specInto(mix.subarray(SEG), zcac, 2, 3);
-    const res = await sess.run({ mix: new ort.Tensor('float32', mix, [1, 2, SEG]), z_cac: new ort.Tensor('float32', zcac, [1, 4, FQ, FRAMES]) });
-    const timeOut = res.time_out.data, zout = res.zout_cac.data;
-    const out = (s, c) => { const x = ispecFrom(zout, s, c); const to = (s * 2 + c) * SEG; const y = new Float32Array(SEG); for (let i = 0; i < SEG; i++) y[i] = (x[i] + timeOut[to + i]) * std + mean; return y; };
-    return { vocalsL: out(3, 0), vocalsR: out(3, 1) };
-  }
-  // Separate vocals from a stereo track at any sample rate. Returns {vocalsL, vocalsR} at the input rate.
+  const tick = () => new Promise(r => setTimeout(r, 0));
+  function back(oL, oR, inL, inR, ratio) { const b = 1 / ratio; const bL = resample(oL, b), bR = resample(oR, b); const fL = new Float32Array(inL.length), fR = new Float32Array(inR.length); fL.set(bL.subarray(0, Math.min(bL.length, fL.length))); fR.set(bR.subarray(0, Math.min(bR.length, fR.length))); return [fL, fR]; }
+
+  // All vocals (Demucs). Returns {vocalsL, vocalsR, ep} at the input rate.
   async function separateVocals(inL, inR, sr, modelParts, onProgress) {
-    const sess = await getSession(modelParts, onProgress);
-    let L = inL, R = inR; const ratio = sr / SR;
-    if (Math.abs(ratio - 1) > 1e-6) { L = resample(inL, ratio); R = resample(inR, ratio); }
-    const T = L.length; const { mean, std } = (() => { const ref = new Float32Array(T); for (let i = 0; i < T; i++) ref[i] = 0.5 * (L[i] + R[i]); let m = 0; for (let i = 0; i < T; i++) m += ref[i]; m /= T; let v = 0; for (let i = 0; i < T; i++) v += (ref[i] - m) ** 2; return { mean: m, std: Math.sqrt(v / Math.max(1, T - 1)) || 1 }; })();
+    const sess = await getSession('demucs', modelParts, onProgress); const ort = root.ort;
+    let L = inL, R = inR; const ratio = sr / SR; if (Math.abs(ratio - 1) > 1e-6) { L = resample(inL, ratio); R = resample(inR, ratio); }
+    const T = L.length; let mean = 0; for (let i = 0; i < T; i++) mean += 0.5 * (L[i] + R[i]); mean /= T; let v = 0; for (let i = 0; i < T; i++) v += (0.5 * (L[i] + R[i]) - mean) ** 2; const std = Math.sqrt(v / Math.max(1, T - 1)) || 1;
     const wL = new Float32Array(T), wR = new Float32Array(T); for (let i = 0; i < T; i++) { wL[i] = (L[i] - mean) / std; wR[i] = (R[i] - mean) / std; }
     const vL = new Float32Array(T), vR = new Float32Array(T), ws = new Float32Array(T);
     const tri = new Float32Array(SEG); const h = SEG >> 1; for (let i = 0; i < h; i++) tri[i] = (i + 1) / h; for (let i = h; i < SEG; i++) tri[i] = (SEG - i) / (SEG - h);
-    const nSeg = Math.max(1, Math.ceil(Math.max(0, T - SEG) / STRIDE) + 1); let k = 0; const t0 = performance.now();
-    const ort = window.ort;
-    const prep = (off) => { const n = Math.min(SEG, T - off); const cL = new Float32Array(SEG), cR = new Float32Array(SEG); cL.set(wL.subarray(off, off + n)); cR.set(wR.subarray(off, off + n));
-      const { mean: m2, std: s2 } = stats(cL, cR); const d = 1e-5 + s2; const mix = new Float32Array(2 * SEG); for (let i = 0; i < SEG; i++) { mix[i] = (cL[i] - m2) / d; mix[SEG + i] = (cR[i] - m2) / d; }
-      const zcac = new Float32Array(4 * FQ * FRAMES); specInto(mix.subarray(0, SEG), zcac, 0, 1); specInto(mix.subarray(SEG), zcac, 2, 3);
-      return { off, n, mix, zcac, m2, d }; };
-    let cur = prep(0);
-    while (cur) {
-      const run = sess.run({ mix: new ort.Tensor('float32', cur.mix, [1, 2, SEG]), z_cac: new ort.Tensor('float32', cur.zcac, [1, 4, FQ, FRAMES]) });
-      const nextOff = cur.off + STRIDE; const nxt = (cur.off + SEG < T) ? prep(nextOff) : null;   // CPU work while the GPU runs
-      const res = await run; const timeOut = res.time_out.data, zout = res.zout_cac.data;
-      for (let c = 0; c < 2; c++) { const x = ispecFrom(zout, 3, c); const to = (3 * 2 + c) * SEG; const dst = c ? vR : vL; for (let i = 0; i < cur.n; i++) dst[cur.off + i] += ((x[i] + timeOut[to + i]) * cur.d + cur.m2) * tri[i]; }
-      for (let i = 0; i < cur.n; i++) ws[cur.off + i] += tri[i];
-      k++; if (onProgress) { const el = (performance.now() - t0) / 1000; onProgress('separate', k / nSeg, el / k * (nSeg - k)); }
-      cur = nxt; await new Promise(r2 => setTimeout(r2, 0));
+    const offs = []; for (let off = 0; ; off += STRIDE) { offs.push(off); if (off + SEG >= T) break; }
+    const nSeg = offs.length; const t0 = performance.now();
+    const prep = (off) => { const n = Math.min(SEG, T - off); const cL = new Float32Array(SEG), cR = new Float32Array(SEG); cL.set(wL.subarray(off, off + n)); cR.set(wR.subarray(off, off + n)); return job('demucsPrep', { L: cL, R: cR }, [cL.buffer, cR.buffer]).then(r => Object.assign(r, { off, n })); };
+    let prepNext = prep(offs[0]); const posts = []; let done = 0;
+    for (let s = 0; s < nSeg; s++) {
+      const cur = await prepNext; if (s + 1 < nSeg) prepNext = prep(offs[s + 1]);
+      const res = await sess.run({ mix: new ort.Tensor('float32', cur.mix, [1, 2, SEG]), z_cac: new ort.Tensor('float32', cur.zcac, [1, 4, FQ, FRAMES]) });
+      const P = FQ * FRAMES; const zv = res.zout_cac.data.slice(3 * 4 * P, 4 * 4 * P); const tv = res.time_out.data.slice(3 * 2 * SEG, 4 * 2 * SEG);
+      posts.push(job('demucsPost', { zv, tv, m2: cur.m2, d: cur.d }, [zv.buffer, tv.buffer]).then(r => { for (let i = 0; i < cur.n; i++) { vL[cur.off + i] += r.L[i] * tri[i]; vR[cur.off + i] += r.R[i] * tri[i]; ws[cur.off + i] += tri[i]; } done++; if (onProgress) { const el = (performance.now() - t0) / 1000; onProgress('separate', done / nSeg, el / done * (nSeg - done)); } }));
+      await tick();
     }
+    await Promise.all(posts);
     for (let i = 0; i < T; i++) { const w = ws[i] || 1; vL[i] = vL[i] / w * std + mean; vR[i] = vR[i] / w * std + mean; }
-    if (Math.abs(ratio - 1) > 1e-6) { const back = 1 / ratio; let oL = resample(vL, back), oR = resample(vR, back); const fixL = new Float32Array(inL.length), fixR = new Float32Array(inR.length); fixL.set(oL.subarray(0, Math.min(oL.length, inL.length))); fixR.set(oR.subarray(0, Math.min(oR.length, inR.length))); return { vocalsL: fixL, vocalsR: fixR, ep: sess._ep }; }
+    if (Math.abs(ratio - 1) > 1e-6) { const [a, b] = back(vL, vR, inL, inR, ratio); return { vocalsL: a, vocalsR: b, ep: sess._ep }; }
     return { vocalsL: vL, vocalsR: vR, ep: sess._ep };
   }
-
-  // ---------- UVR MDX-Net karaoke model: lead vocal vs everything else (backing vocals stay with the band) ----------
-  const MDX = { HOP: 1024, DIM_T: 256, DIM_F: 2048 };
-  const mdxCache = {};
-  function mdxTools(nfft) {
-    if (mdxCache[nfft]) return mdxCache[nfft];
-    const f = makeFFTmixed(nfft), w = new Float32Array(nfft); for (let i = 0; i < nfft; i++) w[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / nfft);
-    return (mdxCache[nfft] = { fft: f, win: w, half: nfft / 2 + 1 });
-  }
-  // chunk [2][chunk] → spek Float32Array [4][DIM_F][256], lowest 3 bins zeroed (as UVR does)
-  function mdxSpek(L, R, nfft) {
-    const { fft: f, win: w, half } = mdxTools(nfft); const T = MDX.DIM_T, F = MDX.DIM_F;
-    const out = new Float32Array(4 * F * T); const br = new Float32Array(nfft), bi = new Float32Array(nfft);
-    [L, R].forEach((x, c) => {
-      const xp = reflectPad(x, nfft / 2, nfft / 2);
-      for (let t = 0; t < T; t++) { const o = t * MDX.HOP; for (let i = 0; i < nfft; i++) { br[i] = xp[o + i] * w[i]; bi[i] = 0; } f(br, bi, false);
-        for (let k = 3; k < F; k++) { out[((c * 2) * F + k) * T + t] = br[k]; out[((c * 2 + 1) * F + k) * T + t] = bi[k]; } }
-    });
-    return out;
-  }
-  // spek [4][DIM_F][256] → [L, R] of length len (istft center=True with window-sum-square normalisation)
-  function mdxWave(spek, nfft, len) {
-    const { fft: f, win: w, half } = mdxTools(nfft); const T = MDX.DIM_T, F = MDX.DIM_F;
-    const outLen = nfft + MDX.HOP * (T - 1); const res = [];
-    const br = new Float32Array(nfft), bi = new Float32Array(nfft);
-    for (let c = 0; c < 2; c++) {
-      const y = new Float32Array(outLen), ws = new Float32Array(outLen);
-      for (let t = 0; t < T; t++) {
-        br.fill(0); bi.fill(0);
-        for (let k = 0; k < F; k++) { br[k] = spek[((c * 2) * F + k) * T + t]; bi[k] = spek[((c * 2 + 1) * F + k) * T + t]; }
-        for (let k = 1; k < half - 1; k++) { br[nfft - k] = br[k]; bi[nfft - k] = -bi[k]; }
-        f(br, bi, true); const o = t * MDX.HOP;
-        for (let i = 0; i < nfft; i++) { y[o + i] += br[i] / nfft * w[i]; ws[o + i] += w[i] * w[i]; }
-      }
-      const out = new Float32Array(len); for (let i = 0; i < len; i++) { const ww = ws[nfft / 2 + i]; out[i] = ww > 1e-8 ? y[nfft / 2 + i] / ww : 0; }
-      res.push(out);
-    }
-    return res;
-  }
-  let karaSession = null;
-  async function getKaraSession(modelUrl, onProgress) {
-    if (karaSession) return karaSession;
-    const ort = await ensureOrt();
-    const bytes = await fetchModel([modelUrl], (f) => onProgress && onProgress('download', f));
-    onProgress && onProgress('compile', 0);
-    karaSession = await ort.InferenceSession.create(bytes, { executionProviders: navigator.gpu ? ['webgpu', 'wasm'] : ['wasm'], graphOptimizationLevel: 'all' });
-    karaSession._ep = navigator.gpu ? 'webgpu' : 'wasm';
-    return karaSession;
-  }
-  // Returns the model's primary stem at the input sample rate. For Karaoke 2 the primary stem is
-  // "instrumental + backing vocals"; lead vocal = mix − that.
+  // Karaoke model primary stem (band + backing vocals). Lead vocal = mix − result.
   async function separateKaraoke(inL, inR, sr, modelUrl, params, onProgress) {
-    const sess = await getKaraSession(modelUrl, onProgress); const ort = window.ort;
+    const sess = await getSession('kara', [modelUrl], onProgress); const ort = root.ort;
     const nfft = params.nfft, comp = params.compensate, overlap = 0.25;
     let L = inL, R = inR; const ratio = sr / SR; if (Math.abs(ratio - 1) > 1e-6) { L = resample(inL, ratio); R = resample(inR, ratio); }
     const T = L.length, chunk = MDX.HOP * (MDX.DIM_T - 1), trim = nfft >> 1, step = Math.floor(chunk * (1 - overlap));
     const padLen = trim + T + chunk; const mL = new Float32Array(padLen), mR = new Float32Array(padLen); mL.set(L, trim); mR.set(R, trim);
-    const rL = new Float32Array(padLen), rR = new Float32Array(padLen), div = new Float32Array(padLen);
-    const win = new Float32Array(chunk); for (let i = 0; i < chunk; i++) win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / chunk);
-    const nChunks = Math.ceil((trim + T) / step); let k = 0; const t0 = performance.now();
-    // CPU/GPU pipelining: prepare chunk k+1 while the GPU runs chunk k
-    let next = (i) => { const cL = mL.subarray(i, i + chunk), cR = mR.subarray(i, i + chunk); return mdxSpek(cL, cR, nfft); };
-    let pending = null, pendingI = 0;
-    for (let i = 0; i < trim + T; i += step) {
-      const spek = pending && pendingI === i ? pending : next(i);
-      const run = sess.run({ input: new ort.Tensor('float32', spek, [1, 4, MDX.DIM_F, MDX.DIM_T]) });
-      const ni = i + step; if (ni < trim + T) { pending = next(ni); pendingI = ni; } else pending = null;
-      const res = await run; const out = res.output.data;
-      const wav = mdxWave(out, nfft, chunk); const n = Math.min(chunk, padLen - i);
-      for (let j = 0; j < n; j++) { rL[i + j] += wav[0][j] * win[j]; rR[i + j] += wav[1][j] * win[j]; div[i + j] += win[j]; }
-      k++; if (onProgress) { const el = (performance.now() - t0) / 1000; onProgress('separate', k / nChunks, el / k * (nChunks - k)); }
-      await new Promise(r => setTimeout(r, 0));
+    const rL = new Float32Array(padLen), rR = new Float32Array(padLen), div = new Float32Array(padLen); const win = getWin(chunk);
+    const offs = []; for (let i = 0; i < trim + T; i += step) offs.push(i); const nCh = offs.length; const t0 = performance.now();
+    const prep = (i) => { const cL = mL.slice(i, i + chunk), cR = mR.slice(i, i + chunk); return job('mdxSpek', { L: cL, R: cR, nfft }, [cL.buffer, cR.buffer]).then(r => ({ spek: r.spek, i })); };
+    let prepNext = prep(offs[0]); const posts = []; let done = 0;
+    for (let c = 0; c < nCh; c++) {
+      const cur = await prepNext; if (c + 1 < nCh) prepNext = prep(offs[c + 1]);
+      const res = await sess.run({ input: new ort.Tensor('float32', cur.spek, [1, 4, MDX.DIM_F, MDX.DIM_T]) });
+      const out = res.output.data.slice();
+      posts.push(job('mdxWave', { spek: out, nfft, len: chunk }, [out.buffer]).then(r => { const n = Math.min(chunk, padLen - cur.i); for (let j = 0; j < n; j++) { rL[cur.i + j] += r.L[j] * win[j]; rR[cur.i + j] += r.R[j] * win[j]; div[cur.i + j] += win[j]; } done++; if (onProgress) { const el = (performance.now() - t0) / 1000; onProgress('separate', done / nCh, el / done * (nCh - done)); } }));
+      await tick();
     }
-    const oL = new Float32Array(T), oR = new Float32Array(T);
-    for (let i = 0; i < T; i++) { const d = div[trim + i] || 1; oL[i] = rL[trim + i] / d * comp; oR[i] = rR[trim + i] / d * comp; }
-    if (Math.abs(ratio - 1) > 1e-6) { const back = 1 / ratio; const bL = resample(oL, back), bR = resample(oR, back); const fL = new Float32Array(inL.length), fR = new Float32Array(inR.length); fL.set(bL.subarray(0, Math.min(bL.length, fL.length))); fR.set(bR.subarray(0, Math.min(bR.length, fR.length))); return { L: fL, R: fR, ep: sess._ep }; }
+    await Promise.all(posts);
+    const oL = new Float32Array(T), oR = new Float32Array(T); for (let i = 0; i < T; i++) { const d = div[trim + i] || 1; oL[i] = rL[trim + i] / d * comp; oR[i] = rR[trim + i] / d * comp; }
+    if (Math.abs(ratio - 1) > 1e-6) { const [a, b] = back(oL, oR, inL, inR, ratio); return { L: a, R: b, ep: sess._ep }; }
     return { L: oL, R: oR, ep: sess._ep };
   }
-  window.ShedDemucs = { separateKaraoke, mdxSpek, mdxWave, makeFFTmixed, separateVocals, getSession, stft, istft, specInto, ispecFrom, SEG, SR, canRun: () => !!navigator.gpu };
-})();
+  root.ShedDemucs = Object.assign(api, { separateVocals, separateKaraoke, getSession, canRun: () => !!navigator.gpu });
+})(typeof self !== 'undefined' ? self : (typeof globalThis !== 'undefined' ? globalThis : this));
