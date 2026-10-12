@@ -178,8 +178,9 @@ kbd{font-family:var(--mono);background:var(--panel2);border:1px solid var(--line
       </div>
       <div class="ctl vocal x-more">
         <h3>Lead vocal <b id="voclbl">full</b></h3>
-        <div class="row"><button data-v="0" class="on">Full</button><button data-v="1">Softer</button><button data-v="2">Off</button></div>
-        <div class="hint">Turns down a centred lead vocal on stereo mixes. Not stem separation; works on most studio recordings.</div>
+        <div class="row" id="sepRow"><button id="sepBtn" disabled>Separate vocals with AI</button></div>
+        <div class="row" id="vocalModes" hidden><button data-v="0" class="on">Full</button><button data-v="1">Quieter</button><button data-v="2">Off</button><button data-v="3">Vocals only</button></div>
+        <div class="hint" id="stemHint">Demucs v4 runs on this computer; nothing is uploaded. Laptop or desktop with Chrome, Edge or Safari 26. About a minute per song, once.</div>
       </div>
       <div class="ctl loop x-more">
         <h3>Loop <b id="looplbl">off</b></h3>
@@ -419,7 +420,7 @@ async function loadFile(file, saved) {
     // Very long files (over 12 min) are processed in mono to keep memory and render time in check on phones.
     if (chans.length === 2 && ab.duration > 12 * 60) { const m = new Float32Array(chans[0].length); for (let i = 0; i < m.length; i++) m[i] = 0.5 * (chans[0][i] + chans[1][i]); S.src = [m]; }
     else S.src = chans.map(c => new Float32Array(c)); // own copies
-    S.pos = 0; S.outLen = 0; S.playing = false; S.loopA = S.loopB = null; S.loop = false; S.loops = 0; S.file = file; S.ref = null; take = null; $('playTake').disabled = true; S.srcFull = null; S.vocal = 0; document.querySelectorAll('[data-v]').forEach(b => b.classList.toggle('on', b.dataset.v === '0')); $('voclbl').textContent = 'full';
+    S.pos = 0; S.outLen = 0; S.playing = false; S.loopA = S.loopB = null; S.loop = false; S.loops = 0; S.file = file; S.ref = null; take = null; $('playTake').disabled = true; S.srcFull = null; S.vocal = 0; S.stems = saved && saved.stems ? { L: fromI16(saved.stems.l), R: fromI16(saved.stems.r) } : null; document.querySelectorAll('[data-v]').forEach(b => b.classList.toggle('on', b.dataset.v === '0')); $('voclbl').textContent = 'full'; stemsUI();
     peaks = null;
     if (saved) { S.id = saved.id; S.semis = saved.semis || 0; S.tempo = saved.tempo || 1; S.loopA = saved.loopA ?? null; S.loopB = saved.loopB ?? null; S.loop = !!saved.loop; S.ref = saved.ref || null; setKey(S.semis, true); setSpeed(S.tempo * 100, true); saveSongSoon(); }
     else { S.id = null; setKey(0, true); setSpeed(100, true); saveSong(); }
@@ -897,12 +898,15 @@ function openDB() {
 async function dbAll() { const d = await openDB(); if (!d) return []; return new Promise((res) => { const q = d.transaction('songs').objectStore('songs').getAll(); q.onsuccess = () => res(q.result || []); q.onerror = () => res([]); }); }
 async function dbPut(rec) { const d = await openDB(); if (!d) return; return new Promise((res) => { const t = d.transaction('songs', 'readwrite'); t.objectStore('songs').put(rec); t.oncomplete = res; t.onerror = res; }); }
 async function dbDel(id) { const d = await openDB(); if (!d) return; return new Promise((res) => { const t = d.transaction('songs', 'readwrite'); t.objectStore('songs').delete(id); t.oncomplete = res; t.onerror = res; }); }
+function toI16(f) { const o = new Int16Array(f.length); for (let i = 0; i < f.length; i++) { const v = Math.max(-1, Math.min(1, f[i])); o[i] = v < 0 ? v * 32768 : v * 32767; } return o; }
+function fromI16(a) { const o = new Float32Array(a.length); for (let i = 0; i < a.length; i++) o[i] = a[i] / 32768; return o; }
 let saveT;
 function saveSongSoon() { clearTimeout(saveT); saveT = setTimeout(saveSong, 600); }
 async function saveSong() {
   if (!S.file) return;
   if (!S.id) S.id = Date.now() + ':' + S.file.name;
-  await dbPut({ id: S.id, name: S.name, file: S.file, semis: S.semis, tempo: S.tempo, loopA: S.loopA, loopB: S.loopB, loop: S.loop, ref: S.ref, opened: Date.now() });
+  const packed = S.stems ? { l: toI16(S.stems.L), r: toI16(S.stems.R) } : null;
+  await dbPut({ id: S.id, name: S.name, file: S.file, semis: S.semis, tempo: S.tempo, loopA: S.loopA, loopB: S.loopB, loop: S.loop, ref: S.ref, stems: packed, opened: Date.now() });
   const all = (await dbAll()).sort((a, b) => b.opened - a.opened);
   for (const old of all.slice(10)) await dbDel(old.id);
   renderRecent(all.slice(0, 10));
@@ -1166,26 +1170,56 @@ function syncMini() {
   $('drop').classList.toggle('empty', !S.src);
 }
 
-// ---------- Lead vocal: centre-channel reduction on stereo mixes ----------
-S.vocal = 0; S.srcFull = null;
-function buildVocal(level) {
-  const src = S.srcFull || S.src; if (src.length < 2) return null;
-  const k = level === 2 ? 1 : 0.6, L = src[0], R = src[1], n = L.length, a = 1 - Math.exp(-2 * Math.PI * 180 / S.sr);
-  const oL = new Float32Array(n), oR = new Float32Array(n); let lp = 0;
-  for (let i = 0; i < n; i++) { const mid = 0.5 * (L[i] + R[i]), side = 0.5 * (L[i] - R[i]); lp += a * (mid - lp); const hp = mid - lp; const c = lp + (1 - k) * hp; oL[i] = side + c; oR[i] = c - side; }
-  return [oL, oR];
+// ---------- Lead vocal: real stems from HT-Demucs v4, separated on this device ----------
+S.vocal = 0; S.srcFull = null; S.stems = null;
+const MODEL_PARTS = ['models/htdemucs.part0', 'models/htdemucs.part1'];
+let demucsLoading = null;
+function ensureDemucs() { if (window.ShedDemucs) return Promise.resolve(window.ShedDemucs); if (!demucsLoading) demucsLoading = new Promise((res, rej) => { const sc = document.createElement('script'); sc.src = 'demucs/shed-demucs.js'; sc.onload = () => res(window.ShedDemucs); sc.onerror = () => rej(new Error('engine missing')); document.head.appendChild(sc); }); return demucsLoading; }
+async function separateVocals() {
+  if (!S.src) return;
+  if (!navigator.gpu) { toast('AI separation needs a laptop or desktop browser with WebGPU: Chrome, Edge, or Safari 26. On the phone, separate once on your computer; the stems are saved with the song.'); return; }
+  let D; try { D = await ensureDemucs(); } catch (e) { toast('The separation engine could not load.'); return; }
+  if (!S.srcFull) S.srcFull = S.src;
+  const full = S.srcFull; const L = full[0], R = full[1] || full[0];
+  const st = $('status'); const btn = $('sepBtn'); btn.disabled = true; st.classList.add('busy');
+  const fmtLeft = (sec) => sec > 90 ? Math.round(sec / 60) + ' min left' : Math.round(sec) + ' s left';
+  try {
+    const t0 = performance.now();
+    const res = await D.separateVocals(L, R, S.sr, MODEL_PARTS, (phase, f, left) => {
+      if (phase === 'download') st.textContent = 'Model ' + Math.round(f * 100) + '% (174 MB, once)';
+      else if (phase === 'compile') st.textContent = 'Preparing model…';
+      else st.textContent = 'Separating ' + Math.round(f * 100) + '%' + (left != null && f < 1 ? ' · ' + fmtLeft(left) : '');
+    });
+    S.stems = { L: res.vocalsL, R: res.vocalsR };
+    $('vocalModes').hidden = false; $('sepRow').hidden = true;
+    $('stemHint').textContent = 'Separated in ' + Math.round((performance.now() - t0) / 1000) + ' s on this computer (' + (res.ep === 'webgpu' ? 'GPU' : 'CPU') + '). Saved with the song.';
+    saveSongSoon(); setVocal(2);
+    toast('Vocals separated. Choose Quieter, Off, or Vocals only.');
+  } catch (e) {
+    console.error(e); st.textContent = 'Ready'; btn.disabled = false;
+    toast('Separation failed: ' + (e.message || e) + '. Try again, or a shorter file.');
+  } finally { st.classList.remove('busy'); if (S.ready && S.ready.every(Boolean)) st.textContent = 'Ready'; }
 }
+$('sepBtn').addEventListener('click', separateVocals);
 function setVocal(level) {
   if (!S.src) return;
   if (!S.srcFull) S.srcFull = S.src;
-  if (level && S.srcFull.length < 2) { toast('This file is mono, so there is no centre channel to turn down.'); level = 0; }
+  if (level && !S.stems) { toast('Separate the vocals first.'); level = 0; }
   S.vocal = level;
   document.querySelectorAll('[data-v]').forEach(b => b.classList.toggle('on', +b.dataset.v === level));
-  $('voclbl').textContent = ['full', 'softer', 'off'][level];
-  S.src = level ? buildVocal(level) : S.srcFull;
+  $('voclbl').textContent = ['full', 'quieter', 'off', 'vocals only'][level];
+  if (!level) S.src = S.srcFull;
+  else {
+    const full = S.srcFull, L = full[0], R = full[1] || full[0], n = L.length, g = level === 1 ? 0.25 : 0;
+    const oL = new Float32Array(n), oR = new Float32Array(n);
+    if (level === 3) { oL.set(S.stems.L.subarray(0, n)); oR.set(S.stems.R.subarray(0, n)); }
+    else for (let i = 0; i < n; i++) { oL[i] = L[i] - (1 - g) * S.stems.L[i]; oR[i] = R[i] - (1 - g) * S.stems.R[i]; }
+    S.src = [oL, oR];
+  }
   peaks = null; rerender();
 }
 document.querySelectorAll('[data-v]').forEach(b => b.addEventListener('click', () => setVocal(+b.dataset.v)));
+function stemsUI() { const has = !!S.stems; $('vocalModes').hidden = !has; $('sepRow').hidden = has; $('sepBtn').disabled = !S.src; if (has) $('stemHint').textContent = 'Stems saved with this song.'; else $('stemHint').textContent = 'Demucs v4 runs on this computer; nothing is uploaded. Laptop or desktop with Chrome, Edge or Safari 26. About a minute per song, once.'; }
 
 // ---------- Microphone: remember permission and start automatically next time ----------
 async function autoMic() {

@@ -118,6 +118,12 @@ if (typeof module !== 'undefined') module.exports = { makeFFT, timeStretch, resa
 // Returns the rendered samples for the chunk with the padding removed (padIn/tempo on each side).
 if (typeof self !== 'undefined' && typeof importScripts === 'function') {
   self.onmessage = (e) => {
+    if (e.data.type === 'vocal') {
+      const { id, L, R, sr, strength } = e.data;
+      const out = reduceVocals(L, R, sr, strength, (f) => self.postMessage({ id, type: 'vocal', progress: f }));
+      self.postMessage({ id, type: 'vocal', done: true, L: out[0], R: out[1] }, [out[0].buffer, out[1].buffer]);
+      return;
+    }
     const { id, chunk, padIn, semitones, tempo, ci } = e.data;
     const y = processChannel(chunk, semitones, tempo);
     const padOut = Math.round((padIn || 0) / tempo);
@@ -125,3 +131,95 @@ if (typeof self !== 'undefined' && typeof importScripts === 'function') {
     self.postMessage({ id, ci, channel: core }, [core.buffer]);
   };
 }
+
+// ---------- Vocal reduction: repetition (REPET-SIM) × panning × pitch-harmonic masks ----------
+// Works on the mid/side + spectrogram of a stereo mix. Returns new [L, R] with the lead vocal attenuated.
+function stft(x, N, H, fft, win) {
+  const F = Math.max(1, Math.floor((x.length - N) / H) + 1), half = N / 2 + 1;
+  const re = new Float32Array(F * half), im = new Float32Array(F * half);
+  const br = new Float32Array(N), bi = new Float32Array(N);
+  for (let f = 0; f < F; f++) { const o = f * H; for (let i = 0; i < N; i++) { br[i] = x[o + i] * win[i]; bi[i] = 0; } fft(br, bi, false); re.set(br.subarray(0, half), f * half); im.set(bi.subarray(0, half), f * half); }
+  return { re, im, F, half };
+}
+function istft(S, N, H, fft, win, len) {
+  const { re, im, F, half } = S; const out = new Float32Array(len), norm = new Float32Array(len);
+  const br = new Float32Array(N), bi = new Float32Array(N);
+  for (let f = 0; f < F; f++) {
+    for (let k = 0; k < half; k++) { br[k] = re[f * half + k]; bi[k] = im[f * half + k]; }
+    for (let k = 1; k < half - 1; k++) { br[N - k] = br[k]; bi[N - k] = -bi[k]; }
+    fft(br, bi, true); const o = f * H;
+    for (let i = 0; i < N && o + i < len; i++) { out[o + i] += br[i] / N * win[i]; norm[o + i] += win[i] * win[i]; }
+  }
+  for (let i = 0; i < len; i++) if (norm[i] > 1e-3) out[i] /= norm[i];
+  return out;
+}
+function reduceVocals(L, R, sr, strength, onProgress) {
+  const N = 2048, H = 512, fft = makeFFT(N), half = N / 2 + 1;
+  const win = new Float32Array(N); for (let i = 0; i < N; i++) win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / N);
+  const BLOCK = Math.round(40 * sr), OV = Math.round(2 * sr), len = L.length;
+  const outL = new Float32Array(len), outR = new Float32Array(len), outW = new Float32Array(len);
+  const binHz = sr / N;
+  const nBands = 48; const bandOf = new Int16Array(half);
+  for (let k = 0; k < half; k++) { const hz = k * binHz; bandOf[k] = Math.min(nBands - 1, Math.floor(nBands * Math.log(1 + hz / 200) / Math.log(1 + sr / 2 / 200))); }
+  const kMax = Math.min(half - 1, Math.floor(12000 / binHz));
+  let start = 0, blockIndex = 0; const nBlocks = Math.ceil(len / (BLOCK - OV));
+  while (start < len) {
+    const end = Math.min(len, start + BLOCK);
+    const sL = stft(L.subarray(start, end), N, H, fft, win), sR = stft(R.subarray(start, end), N, H, fft, win);
+    const F = sL.F;
+    // magnitudes of mid, and per-bin "centredness"
+    const mag = new Float32Array(F * half), pan = new Float32Array(F * half);
+    for (let i = 0; i < F * half; i++) {
+      const lr = sL.re[i], li = sL.im[i], rr = sR.re[i], ri = sR.im[i];
+      const ml = Math.hypot(lr, li), mr = Math.hypot(rr, ri);
+      mag[i] = 0.5 * Math.hypot(lr + rr, li + ri);
+      const sim = (ml * ml + mr * mr) > 1e-12 ? 2 * ml * mr / (ml * ml + mr * mr) : 0;        // 1 = equal level both sides
+      const coh = (ml * mr) > 1e-12 ? (lr * rr + li * ri) / (ml * mr) : 0;                      // 1 = in phase
+      const p = sim * Math.max(0, coh); pan[i] = p * p;                                           // steep: only truly centred bins count fully
+    }
+    // band energies (log-compressed) for the similarity search
+    const bands = new Float32Array(F * nBands);
+    for (let f = 0; f < F; f++) { const o = f * half, b = f * nBands; for (let k = 0; k < half; k++) bands[b + bandOf[k]] += mag[o + k]; for (let j = 0; j < nBands; j++) bands[b + j] = Math.log1p(bands[b + j] * 10); let s = 0; for (let j = 0; j < nBands; j++) s += bands[b + j] * bands[b + j]; s = Math.sqrt(s) || 1; for (let j = 0; j < nBands; j++) bands[b + j] /= s; }
+    // REPET-SIM: for each frame, the K most similar frames at least 1 s away within ±25 s; background = median of them
+    const K = 12, minGap = Math.round(sr / H), maxGap = Math.round(25 * sr / H);
+    const bg = new Float32Array(F * half); const cand = new Float32Array(F); const picks = new Int32Array(K); const tmp = new Float32Array(K + 1);
+    for (let f = 0; f < F; f++) {
+      const b = f * nBands; let n = 0;
+      for (let g = Math.max(0, f - maxGap); g < Math.min(F, f + maxGap); g++) { if (Math.abs(g - f) < minGap) continue; let d = 0; const c = g * nBands; for (let j = 0; j < nBands; j++) d += bands[b + j] * bands[c + j]; cand[g] = d; n++; }
+      // pick top K by similarity (partial selection)
+      let kk = 0; for (let t = 0; t < K; t++) { let best = -1, bv = -1; for (let g = Math.max(0, f - maxGap); g < Math.min(F, f + maxGap); g++) { if (Math.abs(g - f) < minGap) continue; const v = cand[g]; if (v > bv) { bv = v; best = g; } } if (best < 0) break; picks[kk++] = best; cand[best] = -2; }
+      const o = f * half;
+      if (kk < 3) { for (let k = 0; k < half; k++) bg[o + k] = mag[o + k]; continue; }
+      for (let k = 0; k < half; k++) { for (let t = 0; t < kk; t++) tmp[t] = mag[picks[t] * half + k]; const sub = tmp.subarray(0, kk); sub.sort(); const med = kk & 1 ? sub[kk >> 1] : 0.5 * (sub[kk / 2 - 1] + sub[kk / 2]); bg[o + k] = Math.min(med, mag[o + k]); }
+    }
+    // pitch-harmonic mask: dominant centred harmonic source, 80–1000 Hz, per frame
+    const harm = new Float32Array(F * half);
+    const f0Lo = 80, f0Hi = 1000, nF0 = 160; const f0s = new Float32Array(nF0); for (let i = 0; i < nF0; i++) f0s[i] = f0Lo * Math.pow(f0Hi / f0Lo, i / (nF0 - 1));
+    let prevF0 = 0;
+    for (let f = 0; f < F; f++) {
+      const o = f * half; let bestS = 0, bestF = 0;
+      for (let i = 0; i < nF0; i++) { const f0 = f0s[i]; let sal = 0; for (let h = 1; h <= 10; h++) { const k = Math.round(h * f0 / binHz); if (k >= half) break; const v = Math.max(0, mag[o + k] - bg[o + k]) * pan[o + k]; sal += v / Math.sqrt(h); } if (prevF0 && Math.abs(Math.log(f0 / prevF0)) < 0.06) sal *= 1.15; if (sal > bestS) { bestS = sal; bestF = f0; } }
+      let energy = 0; for (let k = 0; k < half; k++) energy += mag[o + k]; if (bestS < 0.02 * energy) { prevF0 = 0; continue; }
+      prevF0 = bestF;
+      for (let h = 1; h <= 40; h++) { const c = h * bestF / binHz; if (c > kMax) break; const w = Math.max(2, 0.025 * c); for (let k = Math.max(0, Math.floor(c - w)); k <= Math.min(half - 1, Math.ceil(c + w)); k++) { const t = 1 - Math.abs(k - c) / w; if (t > harm[o + k]) harm[o + k] = t; } }
+    }
+    // combine: vocal = non-repeating × centred × (harmonic boost), smoothed; then attenuate
+    const V = new Float32Array(F * half);
+    let dN = 0, dP = 0, dH = 0, dW = 0;
+    for (let f = 0; f < F; f++) { const o = f * half; for (let k = 0; k < half; k++) { const m = mag[o + k]; const nonrep = m > 1e-9 ? Math.max(0, 1 - bg[o + k] / m) : 0; const v = nonrep * pan[o + k] * (0.35 + 0.65 * harm[o + k]); V[o + k] = Math.min(1, v * 1.6); dN += nonrep * m; dP += pan[o + k] * m; dH += harm[o + k] * m; dW += m; } }
+    if (reduceVocals.debug) console.log('block', blockIndex, 'nonrep', (dN / dW).toFixed(3), 'pan', (dP / dW).toFixed(3), 'harm', (dH / dW).toFixed(3));
+    // 3x3 smoothing to avoid musical noise
+    const Vs = new Float32Array(F * half);
+    for (let f = 0; f < F; f++) for (let k = 0; k < half; k++) { let s = 0, n = 0; for (let df = -1; df <= 1; df++) { const g = f + df; if (g < 0 || g >= F) continue; for (let dk = -1; dk <= 1; dk++) { const q = k + dk; if (q < 0 || q >= half) continue; s += V[g * half + q]; n++; } } Vs[f * half + k] = s / n; }
+    if (reduceVocals.debug && blockIndex === 0) reduceVocals.last = { V: Vs, nonrepBg: bg, mag, pan, harm, F, half, N, H };
+    for (let i = 0; i < F * half; i++) { const g = 1 - strength * Vs[i]; sL.re[i] *= g; sL.im[i] *= g; sR.re[i] *= g; sR.im[i] *= g; }
+    const bl = istft(sL, N, H, fft, win, end - start), br2 = istft(sR, N, H, fft, win, end - start);
+    // overlap-add blocks with a linear crossfade
+    for (let i = 0; i < end - start; i++) { let w = 1; if (start > 0 && i < OV) w = i / OV; if (end < len && (end - start) - i <= OV) w = Math.min(w, ((end - start) - i) / OV); outL[start + i] += bl[i] * w; outR[start + i] += br2[i] * w; outW[start + i] += w; }
+    blockIndex++; if (onProgress) onProgress(Math.min(1, blockIndex / nBlocks));
+    if (end >= len) break; start = end - OV;
+  }
+  for (let i = 0; i < len; i++) if (outW[i] > 1e-3) { outL[i] /= outW[i]; outR[i] /= outW[i]; }
+  return [outL, outR];
+}
+if (typeof module !== 'undefined') { module.exports.reduceVocals = reduceVocals; module.exports.stft = stft; }
