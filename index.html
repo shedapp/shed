@@ -539,6 +539,207 @@ function trackMelody(x, sr, opts = {}) {
   return pts;
 }
 if (typeof module !== 'undefined') module.exports.trackMelody = trackMelody;
+
+// ---------- Live pitch tracker (streaming) ----------
+// Same core as trackMelody (McLeod NSDF via FFT autocorrelation) plus what a live monitor needs:
+// 60 Hz high-pass, adaptive noise floor, clarity hysteresis for voicing, onset confirmation,
+// octave-jump confirmation and a 3-frame median. Feed any block size; emits one frame per hop.
+class LivePitch {
+  constructor(sr, opts = {}) {
+    this.sr = sr; this.N = 2048; this.H = opts.hop || 512; this.M = 4096; this.fft = makeFFT(this.M);
+    this.re = new Float32Array(this.M); this.im = new Float32Array(this.M); this.cum = new Float64Array(this.N + 1);
+    this.buf = new Float32Array(this.N); this.fill = 0; this.sinceHop = 0; this.w = 0;
+    this.lagMin = Math.floor(sr / 1500); this.lagMax = Math.min(this.N - 2, Math.ceil(sr / 62));
+    this.nsdf = new Float32Array(this.lagMax + 2);
+    // 2nd-order Butterworth high-pass at 60 Hz
+    const w0 = 2 * Math.PI * 60 / sr, cw = Math.cos(w0), al = Math.sin(w0) / (2 * Math.SQRT1_2), a0 = 1 + al;
+    this.hp = { b0: (1 + cw) / 2 / a0, b1: -(1 + cw) / a0, b2: (1 + cw) / 2 / a0, a1: -2 * cw / a0, a2: (1 - al) / a0, x1: 0, x2: 0, y1: 0, y2: 0 };
+    this.floor = 1e-3; this.voiced = false; this.onset = 0; this.prev = null; this.pend = null; this.med = [];
+  }
+  // Song-bleed model: when the song plays through speakers the mic hears it too. We know exactly what the
+  // song is, so we learn how loud it arrives at the mic (coupling) and only accept a pitch whose harmonics
+  // stand clearly above what the song alone would put there.
+  setRef(refWin) { this.refWin = refWin; }
+  harmonicSalience(magSq, f0, binHz) { let s = 0; for (let h = 1; h <= 8; h++) { const k = Math.round(h * f0 / binHz); if (k >= magSq.length - 1) break; s += Math.sqrt(Math.max(magSq[k - 1], magSq[k], magSq[k + 1])); } return s; }
+  // returns raw estimate {midi, clarity, rms} or null for the current window
+  analyse() {
+    const { N, M, re, im, cum, nsdf, lagMin, lagMax } = this; const x = this.buf;
+    let e = 0; for (let i = 0; i < N; i++) { const v = x[i]; re[i] = v; im[i] = 0; e += v * v; } for (let i = N; i < M; i++) { re[i] = 0; im[i] = 0; }
+    const rms = Math.sqrt(e / N);
+    // adaptive noise floor: falls fast, rises slowly (≈ 3 s), so it tracks the room, not the voice
+    this.floor = rms < this.floor ? 0.7 * this.floor + 0.3 * rms : this.floor * 1.004 + 1e-7;
+    const gate = Math.max(this.floor * 3.2, 4e-4);
+    if (rms < gate) return { midi: null, clarity: 0, rms };
+    // song bleed: compare against the reference (what the speakers are playing right now)
+    let refRms = 0, refPow = null;
+    if (this.refWin) { const r = this.refWin; let e2 = 0; for (let i = 0; i < r.length; i++) e2 += r[i] * r[i]; refRms = Math.sqrt(e2 / r.length);
+      if (refRms > 1e-5) { const ratio = rms / refRms;
+        // coupling = how loud the song arrives at the mic; min-tracker that rises slowly (headphones → it learns ≈0)
+        this.coupling = this.coupling == null ? Math.min(ratio, 0.3) : ratio < this.coupling ? 0.85 * this.coupling + 0.15 * ratio : this.coupling * 1.0006;
+        if (rms < 2.0 * this.coupling * refRms) return { midi: null, clarity: 0, rms, bleed: true };
+        const rr = this.rre || (this.rre = new Float32Array(M)), ri = this.rim || (this.rim = new Float32Array(M)), w = this.win || (this.win = (() => { const a = new Float32Array(N); for (let i = 0; i < N; i++) a[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / N); return a; })());
+        for (let i = 0; i < N; i++) { rr[i] = r[i] * w[i]; ri[i] = 0; } for (let i = N; i < M; i++) { rr[i] = 0; ri[i] = 0; } this.fft(rr, ri, false);
+        refPow = new Float32Array(M / 2); for (let i = 0; i < M / 2; i++) refPow[i] = rr[i] * rr[i] + ri[i] * ri[i];
+      } }
+    const micPow = new Float32Array(M / 2);
+    if (refPow) { const mr = this.mre || (this.mre = new Float32Array(M)), mi = this.mim || (this.mim = new Float32Array(M)), w = this.win; for (let i = 0; i < N; i++) { mr[i] = x[i] * w[i]; mi[i] = 0; } for (let i = N; i < M; i++) { mr[i] = 0; mi[i] = 0; } this.fft(mr, mi, false); for (let i = 0; i < M / 2; i++) micPow[i] = mr[i] * mr[i] + mi[i] * mi[i]; }
+    this.fft(re, im, false); for (let i = 0; i < M; i++) { re[i] = re[i] * re[i] + im[i] * im[i]; im[i] = 0; } this.fft(re, im, true);
+    cum[0] = 0; for (let i = 0; i < N; i++) cum[i + 1] = cum[i] + x[i] * x[i];
+    let maxV = 0;
+    for (let tau = lagMin; tau <= lagMax + 1; tau++) { const m = cum[N - tau] + (cum[N] - cum[tau]); const v = m > 0 ? 2 * (re[tau] / M) / m : 0; nsdf[tau] = v; if (tau <= lagMax && v > maxV) maxV = v; }
+    if (maxV < 0.45) return { midi: null, clarity: maxV, rms };
+    const thr = maxV * 0.88; let best = -1;
+    for (let tau = lagMin + 1; tau <= lagMax; tau++) if (nsdf[tau] > nsdf[tau - 1] && nsdf[tau] >= nsdf[tau + 1] && nsdf[tau] >= thr) { best = tau; break; }
+    if (best < 0) return { midi: null, clarity: maxV, rms };
+    const a = nsdf[best - 1], b = nsdf[best], c = nsdf[best + 1]; const den = a - 2 * b + c; const shift = den ? (a - c) / (2 * den) : 0;
+    const f0 = this.sr / (best + Math.max(-0.5, Math.min(0.5, shift)));
+    if (refPow) {   // is this pitch the singer, or the song coming out of the speakers?
+      const binHz = this.sr / M; const sm = this.harmonicSalience(micPow, f0, binHz), sr2 = this.harmonicSalience(refPow, f0, binHz) * this.coupling;
+      if (sm < 2.2 * sr2) return { midi: null, clarity: b, rms, bleed: true };
+    }
+    return { midi: 69 + 12 * Math.log2(f0 / 440), clarity: b, rms };
+  }
+  // continuity, hysteresis and smoothing on top of the raw estimate
+  decide(r) {
+    const onThr = 0.72, offThr = 0.5;
+    let m = r.midi != null && r.clarity >= (this.voiced ? offThr : onThr) ? r.midi : null;
+    if (m == null) { this.voiced = false; this.onset = 0; this.prev = null; this.pend = null; this.med.length = 0; return null; }
+    if (!this.voiced) { this.onset++; if (this.onset < 2) { this.prev = m; return null; } this.voiced = true; }
+    if (this.prev != null) {
+      const d = m - this.prev;
+      if (Math.abs(Math.abs(d) - 12) < 0.8 || Math.abs(Math.abs(d) - 19) < 0.8) {      // octave or octave+fifth jump: confirm before accepting
+        if (this.pend && Math.abs(this.pend.m - m) < 0.8) this.pend.n++; else this.pend = { m, n: 1 };
+        if (this.pend.n < 3) m = this.prev; else this.pend = null;
+      } else this.pend = null;
+    }
+    this.prev = m; this.med.push(m); if (this.med.length > 3) this.med.shift();
+    const s = this.med.slice().sort((p, q) => p - q); return s[s.length >> 1];
+  }
+  // push samples; calls onFrame(midiOrNull, rms) once per hop
+  push(samples, onFrame, ref) {
+    const hp = this.hp, N = this.N, H = this.H, b = this.buf;
+    const rring = ref ? (this.rring || (this.rring = new Float32Array(N))) : null, rb = ref ? (this.rbuf || (this.rbuf = new Float32Array(N))) : null;
+    if (!ref) this.refWin = null;
+    for (let i = 0; i < samples.length; i++) {
+      if (rring) rring[this.w] = ref[i];
+      const x0 = samples[i]; const y = hp.b0 * x0 + hp.b1 * hp.x1 + hp.b2 * hp.x2 - hp.a1 * hp.y1 - hp.a2 * hp.y2; hp.x2 = hp.x1; hp.x1 = x0; hp.y2 = hp.y1; hp.y1 = y;
+      const ring = this.ring || (this.ring = new Float32Array(N)); ring[this.w] = y; this.w = (this.w + 1) % N; if (this.fill < N) this.fill++;
+      if (this.fill === N && ++this.sinceHop >= H) { this.sinceHop = 0; const w = this.w; b.set(ring.subarray(w), 0); b.set(ring.subarray(0, w), N - w);
+        if (rring) { rb.set(rring.subarray(w), 0); rb.set(rring.subarray(0, w), N - w); this.refWin = rb; }
+        const r = this.analyse(); onFrame(this.decide(r), r.rms, i, r); }
+    }
+  }
+}
+if (typeof module !== 'undefined') module.exports.LivePitch = LivePitch;
+
+// ---------- Sing tracker: the singer's pitch while the song plays through speakers ----------
+// Karaoke-machine logic, kept simple and predictable:
+//  1) Precise time-domain pitch (McLeod NSDF) of the mic, like the original monitor.
+//  2) Shed knows how loud the song is at every moment. It learns how much of it reaches the mic
+//     (a low percentile of mic/song level over the last seconds — the moments you are not singing),
+//     and only believes the mic when it is clearly louder than that leak.
+//  3) In the grey zone (voice only a little above the leak) the pitch must not be one the song itself is
+//     sounding right now. With headphones the leak learns ≈ 0 and nothing is gated.
+class SingTracker extends LivePitch {
+  constructor(sr, opts = {}) {
+    super(sr, opts);
+    this.hist = new Float32Array(700); this.nh = 0; this.ih = 0; this.k = null; this.kAt = 0;
+    this.songH = new Float32Array(Math.max(8, Math.round(0.3 * sr / this.H))); this.si = 0;
+    this.room = null; this.stats = { gated: 0 }; this.P = Object.assign({ gate: 1.7, strong: 3, sal: 3, pct: 0.1, onset: 4, leak: 'min', cohEvery: 4, cohMargin: 1.3, cohTau: 4, cohNeff: 1 }, opts);
+  }
+  // Leak by coherence (what an echo canceller does): average the cross-spectrum of mic and song over ~3 s.
+  // Your voice is unrelated to the song's waveform and averages out; only the song's own sound in the mic remains.
+  coh(mic, song) {
+    const L = 8192, sr = this.sr;
+    if (!this.cz) { this.cz = { f: makeFFT(L), ar: new Float32Array(L), ai: new Float32Array(L), br: new Float32Array(L), bi: new Float32Array(L), w: new Float32Array(L), xr: new Float64Array(L / 2), xi: new Float64Array(L / 2), yy: new Float64Array(L / 2), xx: new Float64Array(L / 2), n: 0 }; for (let i = 0; i < L; i++) this.cz.w[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / L); }
+    const c = this.cz, { ar, ai, br, bi, w } = c;
+    for (let i = 0; i < L; i++) { ar[i] = mic[i] * w[i]; ai[i] = 0; br[i] = song[i] * w[i]; bi[i] = 0; }
+    c.f(ar, ai, false); c.f(br, bi, false);
+    const tau = this.P.cohTau, a = 1 - Math.exp(-(this.H * this.P.cohEvery / sr) / tau), Neff = Math.max(1, Math.min(this.P.cohNeff * tau * sr / (L / 2), (this.cz.n + 1) * this.H * this.P.cohEvery / (L / 2))), k0 = Math.floor(120 * L / sr), k1 = Math.floor(5000 * L / sr);
+    let B = 0, Y = 0;
+    for (let k = k0; k < k1; k++) {
+      // mic × conj(song)
+      const xr = ar[k] * br[k] + ai[k] * bi[k], xi = ai[k] * br[k] - ar[k] * bi[k], yy = br[k] * br[k] + bi[k] * bi[k], xx = ar[k] * ar[k] + ai[k] * ai[k];
+      c.xr[k] += a * (xr - c.xr[k]); c.xi[k] += a * (xi - c.xi[k]); c.yy[k] += a * (yy - c.yy[k]); c.xx[k] += a * (xx - c.xx[k]);
+      // minus the part a finite average leaves behind by chance (|Sxy|² bias ≈ Sxx·Syy / independent frames)
+      if (c.yy[k] > 0) B += Math.max(0, c.xr[k] * c.xr[k] + c.xi[k] * c.xi[k] - c.xx[k] * c.yy[k] / Neff) / c.yy[k]; Y += c.yy[k];
+    }
+    c.n++;
+    if (c.n > 20 && Y > 0) this.kc = Math.sqrt(B / Y);
+  }
+  leak() {   // 10th percentile of mic/song ratio over ~8 s, recomputed every 16 frames
+    if (this.P.leak === 'coh') return this.kc == null ? null : (this.k = this.kc * this.P.cohMargin);
+    if (this.nh < 40) return this.k;
+    if (++this.kAt % 16 === 0 || this.kp == null) { const a = Array.from(this.hist.subarray(0, this.nh)).sort((p, q) => p - q); this.kp = a[Math.floor(a.length * this.P.pct)]; }
+    // the percentile can mistake a singer who never pauses for leak; coherence can't, so it caps it
+    this.k = this.P.leak === 'min' && this.kc != null ? Math.min(this.kp, this.kc * this.P.cohMargin) : this.kp;
+    return this.k;
+  }
+  analyse() {
+    const { N, M, re, im, cum, nsdf, lagMin, lagMax } = this; const x = this.buf;
+    let e = 0; for (let i = 0; i < N; i++) { const v = x[i]; re[i] = v; im[i] = 0; e += v * v; } for (let i = N; i < M; i++) { re[i] = 0; im[i] = 0; }
+    const rms = Math.sqrt(e / N); this.stats.frames = (this.stats.frames || 0) + 1;
+    // song level now (max over the last 300 ms covers any speaker/latency delay)
+    let songRms = 0; if (this.refWin) { const r = this.refWin; let e2 = 0; for (let i = N >> 1; i < N; i++) e2 += r[i] * r[i]; songRms = Math.sqrt(e2 / (N >> 1)); }
+    this.songH[this.si] = songRms; this.si = (this.si + 1) % this.songH.length; let songMax = 0; for (const v of this.songH) if (v > songMax) songMax = v;
+    const songOn = songMax > 2e-4;
+    // room noise floor, learned only while the song is not playing
+    if (!songOn) this.room = this.room == null ? 1e-3 : rms < this.room ? 0.6 * this.room + 0.4 * rms : Math.min(4e-3, this.room * 1.0008);   // starts low, rises slowly, capped below singing level
+    if (songOn) { this.hist[this.ih] = rms / songMax; this.ih = (this.ih + 1) % this.hist.length; if (this.nh < this.hist.length) this.nh++; }
+    const gate = Math.max(6e-4, (this.room || 0) * 2.5);
+    if (rms < gate) return { midi: null, clarity: 0, rms };
+    let bleed = 0, strong = true;
+    if (songOn) {
+      const k = this.leak(); if (k != null) { bleed = k * songMax; if (rms < this.P.gate * bleed) { this.stats.gated++; return { midi: null, clarity: 0, rms, bleed: true }; } strong = rms > this.P.strong * bleed; }
+      else strong = false;
+    }
+    this.fft(re, im, false); for (let i = 0; i < M; i++) { re[i] = re[i] * re[i] + im[i] * im[i]; im[i] = 0; } this.fft(re, im, true);
+    cum[0] = 0; for (let i = 0; i < N; i++) cum[i + 1] = cum[i] + x[i] * x[i];
+    let maxV = 0;
+    for (let tau = lagMin; tau <= lagMax + 1; tau++) { const m = cum[N - tau] + (cum[N] - cum[tau]); const v = m > 0 ? 2 * (re[tau] / M) / m : 0; nsdf[tau] = v; if (tau <= lagMax && v > maxV) maxV = v; }
+    if (maxV < 0.5) return { midi: null, clarity: maxV, rms };
+    const thr = maxV * 0.88; let best = -1;
+    for (let tau = lagMin + 1; tau <= lagMax; tau++) if (nsdf[tau] > nsdf[tau - 1] && nsdf[tau] >= nsdf[tau + 1] && nsdf[tau] >= thr) { best = tau; break; }
+    if (best < 0) return { midi: null, clarity: maxV, rms };
+    const a = nsdf[best - 1], b = nsdf[best], c = nsdf[best + 1]; const den = a - 2 * b + c; const shift = den ? (a - c) / (2 * den) : 0;
+    const f0 = this.sr / (best + Math.max(-0.5, Math.min(0.5, shift)));
+    if (songOn && !strong) {
+      // grey zone: is this pitch already sounding in the song? compare harmonic energy mic vs song
+      const w = this.win || (this.win = (() => { const q = new Float32Array(N); for (let i = 0; i < N; i++) q[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / N); return q; })());
+      const mr = this.mre || (this.mre = new Float32Array(M)), mi = this.mim || (this.mim = new Float32Array(M)), rr = this.rre || (this.rre = new Float32Array(M)), ri = this.rim || (this.rim = new Float32Array(M));
+      const r = this.refWin; for (let i = 0; i < N; i++) { mr[i] = x[i] * w[i]; mi[i] = 0; rr[i] = r[i] * w[i]; ri[i] = 0; } for (let i = N; i < M; i++) { mr[i] = mi[i] = rr[i] = ri[i] = 0; }
+      this.fft(mr, mi, false); this.fft(rr, ri, false);
+      const mp = this.mp || (this.mp = new Float32Array(M / 2)), rp = this.rp || (this.rp = new Float32Array(M / 2));
+      for (let i = 0; i < M / 2; i++) { mp[i] = mr[i] * mr[i] + mi[i] * mi[i]; rp[i] = rr[i] * rr[i] + ri[i] * ri[i]; }
+      const binHz = this.sr / M, sm = this.harmonicSalience(mp, f0, binHz), ss = this.harmonicSalience(rp, f0, binHz) * (this.k || 1) * (songMax / Math.max(1e-6, songRms));
+      if (sm < this.P.sal * ss) { this.stats.gated++; return { midi: null, clarity: b, rms, bleed: true }; }
+    }
+    return { midi: 69 + 12 * Math.log2(f0 / 440), clarity: b, rms, songOn };
+  }
+  push(samples, onFrame, ref) {
+    if (ref && this.P.leak !== 'pct') {
+      const L = 8192, lag = Math.round(0.02 * this.sr);   // song window starts 20 ms earlier (mic input latency)
+      if (!this.lm) { this.lm = new Float32Array(L); this.ls = new Float32Array(L + lag); this.lw = 0; this.lcount = 0; this.lin1 = new Float32Array(L); this.lin2 = new Float32Array(L); this.lag = lag; }
+      for (let i = 0; i < samples.length; i++) {
+        this.lm[this.lw % L] = samples[i]; this.ls[this.lw % (L + lag)] = ref[i]; this.lw++;
+        if (this.lw >= L + lag && ++this.lcount >= this.H * this.P.cohEvery) {
+          this.lcount = 0; let songOn = false;
+          for (let j = 0; j < L; j++) { this.lin1[j] = this.lm[(this.lw - L + j) % L]; const v = this.ls[(this.lw - L - lag + j) % (L + lag)]; this.lin2[j] = v; if (v !== 0) songOn = true; }
+          if (songOn) this.coh(this.lin1, this.lin2);
+        }
+      }
+    }
+    super.push(samples, onFrame, ref);
+  }
+  decide(r) {   // stricter voicing while the song plays
+    if (r.midi != null && r.songOn && r.clarity < (this.voiced ? 0.6 : 0.8)) r = { midi: null, clarity: r.clarity, rms: r.rms };
+    // while the song plays, a new phrase must hold for a few frames before it is shown (kills one-frame blips)
+    if (r.midi != null && !this.voiced && r.songOn) { this.on2 = (this.on2 || 0) + 1; if (this.on2 < this.P.onset) { this.prev = r.midi; return null; } }
+    if (r.midi == null) this.on2 = 0;
+    return super.decide(r);
+  }
+}
+if (typeof module !== 'undefined') module.exports.SingTracker = SingTracker;
 </script>
 <script>
 (() => {
@@ -565,7 +766,7 @@ function ensureCtx() {
   if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return; }
   ctx = new (window.AudioContext || window.webkitAudioContext)();
   proc = ctx.createScriptProcessor(4096, 0, 2);
-  proc.onaudioprocess = onAudio;
+  proc.onaudioprocess = onAudio; tapeInit(ctx.sampleRate);
   const gain = ctx.createGain(); gain.gain.value = 1;
   proc.connect(gain).connect(ctx.destination);
 }
@@ -573,7 +774,11 @@ function ensureCtx() {
 function onAudio(e) {
   const L = e.outputBuffer.getChannelData(0), R = e.outputBuffer.getChannelData(1);
   const n = L.length;
-  if (!S.playing || !S.out) { L.fill(0); R.fill(0); return; }
+  const tw = TAPE.w, tn = TAPE.n, tp = TAPE.pos;
+  TAPE.blocks.push({ t: e.playbackTime || ctx.currentTime, i: tw }); if (TAPE.blocks.length > 48) TAPE.blocks.shift();
+  for (let i = 0; i < n; i++) tp[(tw + i) % tn] = -1;
+  TAPE.w = tw + n;
+  if (!S.playing || !S.out) { L.fill(0); R.fill(0); for (let i = 0; i < n; i++) TAPE.buf[(tw + i) % tn] = 0; return; }
   const oL = S.out[0], oR = S.out[1] || S.out[0];
   const chunkLen = chunkOutLen();
   let p = S.pos;
@@ -583,9 +788,10 @@ function onAudio(e) {
     if (p >= S.outLen) { S.playing = false; p = 0; for (; i < n; i++) { L[i] = 0; R[i] = 0; } setTimeout(updatePlayBtn, 0); break; }
     const c = Math.floor(p / chunkLen);
     if (!S.ready[c]) { prioritise(c); for (; i < n; i++) { L[i] = 0; R[i] = 0; } break; }
-    L[i] = oL[p]; R[i] = oR[p]; p++;
+    L[i] = oL[p]; R[i] = oR[p]; tp[(tw + i) % tn] = p; p++;
   }
   S.pos = p;
+  for (let i = 0; i < n; i++) TAPE.buf[(tw + i) % tn] = 0.5 * (L[i] + R[i]);
 }
 
 const chunkInLen = () => Math.round(CHUNK_SEC * S.sr);
@@ -766,7 +972,7 @@ document.addEventListener('drop', (e) => { const f = e.dataTransfer.files && e.d
 // ---------- Transport ----------
 function updatePlayBtn() { $('play').textContent = S.playing ? 'Pause' : 'Play'; }
 function togglePlay() { if (!S.src) return; ensureCtx(); S.playing = !S.playing; updatePlayBtn(); }
-function seekFrac(f) { if (!S.outLen) return; S.pos = Math.max(0, Math.min(S.outLen - 1, Math.floor(f * S.outLen))); }
+function seekFrac(f) { if (!S.outLen) return; KAR.hits.clear(); S.pos = Math.max(0, Math.min(S.outLen - 1, Math.floor(f * S.outLen))); }
 function seekBy(sec) { if (!S.outLen) return; S.pos = Math.max(0, Math.min(S.outLen - 1, S.pos + Math.round(sec * S.sr))); }
 $('play').addEventListener('click', togglePlay);
 $('back').addEventListener('click', () => seekBy(-5));
@@ -885,74 +1091,88 @@ $('export').addEventListener('click', () => {
 });
 
 // ---------- Pitch monitor ----------
-let micStream = null, analyser = null, micOn = false, traceHist = [];
+// The mic runs through SingTracker (dsp.js): precise NSDF pitch, plus a song-leak gate so the song coming out
+// of the speakers is never drawn as your voice. Every voice frame is stamped with the song position you were
+// hearing at that moment, so the karaoke lane lines your voice up with the record's notes exactly.
+let micStream = null, micOn = false, traceHist = [];
 const trace = $('trace'), tctx = trace.getContext('2d');
-let recNode = null, recording = null, take = null, refRec = null;
+let recNode = null, recording = null, take = null, refRec = null, tracker = null, SingTrackerCls = null;
+// Song tape: the last 4 s the speakers played, sample by sample, with the song position of each sample.
+const TAPE = { n: 0, buf: null, pos: null, blocks: [], w: 0 };
+function tapeInit(sr) { TAPE.n = Math.round(sr * 4); TAPE.buf = new Float32Array(TAPE.n); TAPE.pos = new Float64Array(TAPE.n).fill(-1); TAPE.w = 0; TAPE.blocks = []; }
+function tapeIdx(t) { const B = TAPE.blocks; for (let i = B.length - 1; i >= 0; i--) if (B[i].t <= t) return B[i].i + Math.floor((t - B[i].t) * ctx.sampleRate); return -1; }
+function tapePos(t) { const i = tapeIdx(t); if (i < 0 || i >= TAPE.w || TAPE.w - i >= TAPE.n) return null; const p = TAPE.pos[i % TAPE.n]; return p >= 0 ? p : null; }
+let outLat = 0.03;
+function speakerTime() {   // playback time of the sample leaving the speakers right now
+  if (ctx.getOutputTimestamp) { const ts = ctx.getOutputTimestamp(); if (ts.contextTime > 0 && ts.performanceTime > 0) { const t = ts.contextTime + (performance.now() - ts.performanceTime) / 1000; outLat = 0.95 * outLat + 0.05 * Math.max(0, Math.min(0.5, ctx.currentTime - t)); return t; } }
+  return ctx.currentTime - outLat;
+}
 async function startMic() { if (!micOn) await micToggle(); return micOn; }
 $('mic').addEventListener('click', () => micToggle());
 async function micToggle(quiet) {
-  if (micOn) { try { localStorage.setItem('shed.mic', '0'); } catch (e) {} if (recording) stopRecording(); if (refRec) stopRef(); micOn = false; micStream.getTracks().forEach(t => t.stop()); micStream = null; $('mic').textContent = 'Start mic'; $('mic').classList.remove('on'); $('note').textContent = '—'; $('hz').textContent = ''; return; }
+  if (micOn) { try { localStorage.setItem('shed.mic', '0'); } catch (e) {} if (recording) stopRecording(); if (refRec) stopRef(); micOn = false; micStream.getTracks().forEach(t => t.stop()); micStream = null; if (recNode) { recNode.onaudioprocess = null; recNode.disconnect(); recNode = null; } $('mic').textContent = 'Start mic'; $('mic').classList.remove('on'); $('note').textContent = '—'; $('hz').textContent = ''; lastMidi = null; return; }
   ensureCtx();
   try {
     micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
   } catch (err) { if (!quiet) toast('Microphone not available here. Allow mic access in your browser, or open Shed in Safari/Chrome.'); return; }
   try { localStorage.setItem('shed.mic', '1'); } catch (e) {}
+  if (!SingTrackerCls) SingTrackerCls = new Function($('dspsrc').textContent + '; return SingTracker;')();
+  tracker = new SingTrackerCls(ctx.sampleRate);
   const srcNode = ctx.createMediaStreamSource(micStream);
-  analyser = ctx.createAnalyser(); analyser.fftSize = 2048; srcNode.connect(analyser);
-  recNode = ctx.createScriptProcessor(4096, 1, 1); recNode.onaudioprocess = (e) => { if (recording) recording.chunks.push(new Float32Array(e.inputBuffer.getChannelData(0))); }; const sink = ctx.createGain(); sink.gain.value = 0; srcNode.connect(recNode).connect(sink).connect(ctx.destination);
+  const N = 1024, refBlk = new Float32Array(N); let fr = 0;
+  recNode = ctx.createScriptProcessor(N, 1, 1);
+  recNode.onaudioprocess = (e) => {
+    const x = e.inputBuffer.getChannelData(0), sr = ctx.sampleRate;
+    if (recording) recording.chunks.push(new Float32Array(x));
+    const capEnd = (e.playbackTime || ctx.currentTime) - N / sr;         // render time of this block's last sample
+    const playing = S.playing && TAPE.buf;
+    const i0 = playing ? tapeIdx(capEnd - (N - 1) / sr - outLat) : -1;   // what the speakers played meanwhile
+    if (i0 >= 0 && i0 + N <= TAPE.w && TAPE.w - i0 < TAPE.n) for (let j = 0; j < N; j++) refBlk[j] = TAPE.buf[(i0 + j) % TAPE.n]; else refBlk.fill(0);
+    const wall = performance.now();
+    tracker.push(x, (midi, rms, j) => {
+      const back = (N - 1 - j) / sr + 1024 / sr;                        // centre of the 2048-sample window
+      const pos = playing ? tapePos(capEnd - back - outLat) : null;
+      onVoiceFrame(midi, pos, wall - back * 1000, (fr++ & 1) === 0);
+    }, refBlk);
+  };
+  const sink = ctx.createGain(); sink.gain.value = 0; srcNode.connect(recNode).connect(sink).connect(ctx.destination);
   micOn = true; $('mic').textContent = 'Stop mic'; $('mic').classList.add('on');
 }
-const tdBuf = new Float32Array(2048);
-// McLeod-style normalised autocorrelation pitch detector
-function detectPitch(buf, sr) {
-  const n = buf.length; let rms = 0; for (let i = 0; i < n; i++) rms += buf[i] * buf[i]; rms = Math.sqrt(rms / n);
-  if (rms < 0.01) return -1;
-  const maxLag = Math.floor(sr / 60), minLag = Math.floor(sr / 1200);
-  const nsdf = new Float32Array(maxLag + 1);
-  for (let lag = minLag; lag <= maxLag; lag++) { let ac = 0, m = 0; for (let i = 0; i < n - lag; i++) { ac += buf[i] * buf[i + lag]; m += buf[i] * buf[i] + buf[i + lag] * buf[i + lag]; } nsdf[lag] = m > 0 ? 2 * ac / m : 0; }
-  // pick first strong peak
-  let best = -1, bestV = 0, maxV = 0;
-  for (let lag = minLag + 1; lag < maxLag; lag++) if (nsdf[lag] > maxV) maxV = nsdf[lag];
-  const thr = Math.max(0.8, maxV * 0.9);
-  let lag = minLag + 1;
-  while (lag < maxLag) {
-    if (nsdf[lag] > nsdf[lag - 1] && nsdf[lag] >= nsdf[lag + 1] && nsdf[lag] > thr) { best = lag; bestV = nsdf[lag]; break; }
-    lag++;
-  }
-  if (best < 0 || bestV < 0.8) return -1;
-  const a = nsdf[best - 1], b = nsdf[best], c = nsdf[best + 1];
-  const shift = (a - c) / (2 * (a - 2 * b + c) || 1);
-  return sr / (best + shift);
-}
-let lastDet = 0;
-const sessionLog = [];            // {t, midi} voiced frames for the whole session
-let viewLo = 55 - 8;              // bottom MIDI note of the trace window (smoothly follows the voice)
+let viewLo = 55 - 8;              // bottom MIDI note of the trace window (smoothly follows the voice / the song)
 const VIEW_SPAN = 17;             // semitones visible in the trace
 const KEY_W = 46;                 // width of the vertical keyboard inside the trace
-let lastMidi = null, lastAnalysis = 0;
+let lastMidi = null, lastAnalysis = 0, lastSlow = 0, seenLoops = 0;
+const sessionLog = [];            // {t, midi, frac} voiced frames for the whole session
+function onVoiceFrame(midi, pos, t, logIt) {
+  const frac = pos != null && S.outLen ? pos / S.outLen : null;
+  traceHist.push({ t, midi, frac });
+  lastMidi = midi;
+  if (midi == null) return;
+  if (frac != null) karaokeFrame(midi, frac);
+  if (!logIt) return;               // the analysis keeps ~43 frames a second
+  sessionLog.push({ t, midi, frac }); if (sessionLog.length > 45000) sessionLog.splice(0, 5000);
+  if (refRec && frac != null) refRec.points.push({ frac, midi });
+}
 function monitorTick(now) {
-  if (micOn && analyser && now - lastDet > 40) {
-    lastDet = now;
-    analyser.getFloatTimeDomainData(tdBuf);
-    const f = detectPitch(tdBuf, ctx.sampleRate);
+  if (ctx) speakerTime();
+  while (traceHist.length && now - traceHist[0].t > 10000) traceHist.shift();
+  if (micOn) {
     const a4 = +$('a4').value || 440;
-    if (f > 0) {
-      const midi = 69 + 12 * Math.log2(f / a4);
-      const nearest = Math.round(midi), cents = (midi - nearest) * 100;
+    if (lastMidi != null) {
+      const midi = lastMidi + 12 * Math.log2(440 / a4), nearest = Math.round(midi), cents = (midi - nearest) * 100, f = 440 * Math.pow(2, (lastMidi - 69) / 12);
       $('note').innerHTML = NOTE_NAMES[((nearest % 12) + 12) % 12] + '<small>' + (Math.floor(nearest / 12) - 1) + '</small>';
       $('hz').textContent = f.toFixed(1) + ' Hz · ' + (cents >= 0 ? '+' : '') + cents.toFixed(0) + '¢';
       $('needle').style.left = (50 + cents) + '%';
       $('needle').style.background = Math.abs(cents) <= 10 ? 'var(--good)' : Math.abs(cents) <= 25 ? 'var(--accent)' : 'var(--warn)';
-      const frac = S.playing && S.outLen ? S.pos / S.outLen : null;
-      traceHist.push({ t: now, midi, frac }); sessionLog.push({ t: now, midi, frac }); lastMidi = midi;
-      if (refRec && frac != null) refRec.points.push({ frac, midi });
-      if (sessionLog.length > 45000) sessionLog.splice(0, 5000);
-    } else { traceHist.push({ t: now, midi: null }); lastMidi = null; }
-    while (traceHist.length && now - traceHist[0].t > 8000) traceHist.shift();
-    // ease the window so the voice stays inside the middle 60% of the trace
-    if (lastMidi != null) { const lo = viewLo + VIEW_SPAN * 0.2, hi = viewLo + VIEW_SPAN * 0.8; const target = lastMidi < lo ? lastMidi - VIEW_SPAN * 0.2 : lastMidi > hi ? lastMidi - VIEW_SPAN * 0.8 : viewLo; viewLo += (target - viewLo) * 0.15; }
-    drawTrace(now); drawPiano();
-    if (now - lastAnalysis > 1000) { lastAnalysis = now; analyseSession(); }
+    }
+  }
+  if (S.loops !== seenLoops) { seenLoops = S.loops; KAR.hits.clear(); }
+  drawTrace(now);
+  if (micOn && now - lastSlow > 40) {
+    lastSlow = now; drawPiano();
+    if (now - lastAnalysis > 1000) { lastAnalysis = now; analyseSession(); karaokeOctave();
+      // if the song keeps drowning the mic, say so once in a while (headphones fix it completely)
+      if (tracker) { const g = tracker.stats.gated, f = tracker.stats.frames || 0; KAR.tip = S.playing && KAR.lastF != null && f - KAR.lastF > 20 && (g - KAR.lastG) / (f - KAR.lastF) > 0.35; KAR.lastG = g; KAR.lastF = f; } }
     trainerTick(); warmTick(now);
     if (refRec && S.loop && S.loops !== refRec.loops) stopRef();
     if (recording && S.loop && S.loops !== recording.loops) stopRecording();
@@ -961,53 +1181,157 @@ function monitorTick(now) {
   requestAnimationFrame(monitorTick);
 }
 const isBlack = (m) => [1, 3, 6, 8, 10].includes(((m % 12) + 12) % 12);
+
+// ---------- Karaoke lane: the record's melody as note bars, your voice drawn over it ----------
+// Notes come from the melody of the record (lead stem) or from a reference you sang. They scroll right→left;
+// the line at 30% is "now". A bar fills gold where your voice sits within half a semitone of it (any octave).
+const KAR = { cache: new WeakMap(), hits: new Map(), oct: 0, octCand: 0, octVotes: 0, pairs: [] };
+function refNotes() {
+  const R = S.ref; if (!R || !R.points || R.points.length < 10 || !S.dur) return null;
+  let notes = KAR.cache.get(R); if (notes) return notes;
+  notes = toNotes(R.points, S.dur); KAR.cache.set(R, notes); KAR.hits.clear(); return notes;
+}
+function toNotes(P, dur) {
+  const pts = P.filter(p => p.frac != null && isFinite(p.midi)).sort((a, b) => a.frac - b.frac); if (pts.length < 10) return [];
+  const offs = pts.map(p => p.midi - Math.round(p.midi)).sort((a, b) => a - b), tune = offs[offs.length >> 1];   // the record's tuning
+  const segs = []; let cur = null, cand = null;
+  const sec = (a, b) => (b - a) * dur;
+  const close = (end) => { if (cur) { cur.b = end; segs.push(cur); } cur = null; cand = null; };
+  for (const p of pts) {
+    const m = p.midi - tune;
+    if (cur && sec(cur.lastF, p.frac) > 0.09) close(cur.lastF);
+    if (!cur) { cur = { q: Math.round(m), a: p.frac, lastF: p.frac, v: [m] }; continue; }
+    if (Math.abs(m - cur.q) <= 0.6) { cur.v.push(m); cur.lastF = p.frac; cand = null; continue; }
+    if (!cand || Math.abs(m - cand.q) > 0.6) cand = { q: Math.round(m), a: p.frac, v: [] };
+    cand.v.push(m); cur.lastF = p.frac;
+    if (sec(cand.a, p.frac) >= 0.06) { const c = cand; close(c.a); cur = { q: c.q, a: c.a, lastF: p.frac, v: c.v }; }
+  }
+  close(cur ? cur.lastF : 0);
+  let notes = segs.map(s => { const v = s.v.slice().sort((a, b) => a - b); return { a: s.a, b: s.b, m: Math.round(v[v.length >> 1]) }; }).filter(n => sec(n.a, n.b) >= 0.08);
+  // a lone note an octave away from both neighbours is a tracking slip
+  for (let i = 1; i < notes.length - 1; i++) { const p = notes[i - 1], n = notes[i], q = notes[i + 1]; if (sec(p.b, n.a) > 1 || sec(n.b, q.a) > 1 || sec(n.a, n.b) > 0.4) continue; const d1 = n.m - p.m, d2 = n.m - q.m; if (Math.abs(d1) >= 10 && Math.abs(d2) >= 10 && Math.sign(d1) === Math.sign(d2)) n.m -= 12 * Math.sign(d1); }
+  // scoops, fall-offs and wide vibrato: a short blip a half step from the note it leans on is part of that note
+  const tight = (x, y) => sec(x.b, y.a) < 0.05;
+  for (let pass = 0; pass < 2; pass++) for (let i = 0; i < notes.length; i++) {
+    const n = notes[i], p = notes[i - 1], q = notes[i + 1], d = sec(n.a, n.b); if (n.dead) continue;
+    if (p && q && !p.dead && p.m === q.m && Math.abs(n.m - p.m) === 1 && d < 0.2 && tight(p, n) && tight(n, q)) { p.b = q.b; n.dead = q.dead = true; i++; continue; }   // A G# A
+    if (d < 0.13 && q && !q.dead && Math.abs(n.m - q.m) === 1 && tight(n, q) && sec(q.a, q.b) > d) { q.a = n.a; n.dead = true; continue; }                          // scoop into the note
+    if (d < 0.13 && p && !p.dead && Math.abs(n.m - p.m) === 1 && tight(p, n) && sec(p.a, p.b) > d) { p.b = n.b; n.dead = true; }                                     // fall-off
+  }
+  notes = notes.filter(n => !n.dead);
+  const out = []; for (const n of notes) { const l = out[out.length - 1]; if (l && l.m === n.m && sec(l.b, n.a) < 0.12) l.b = n.b; else out.push({ a: n.a, b: n.b, m: n.m }); }
+  for (const n of out) n.m += tune;
+  return out;
+}
+function noteAtFrac(notes, f) { let lo = 0, hi = notes.length - 1; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (notes[mid].a <= f) lo = mid; else hi = mid - 1; } const n = notes[lo]; return n && n.a <= f && f <= n.b ? lo : -1; }
+const karShift = () => S.semis - (S.ref ? S.ref.semis || 0 : 0);
+function karaokeFrame(midi, frac) {
+  const notes = refNotes(); if (!notes || !notes.length) return;
+  const i = noteAtFrac(notes, frac); if (i < 0) return;
+  const target = notes[i].m + karShift(); let d = midi - target;
+  KAR.pairs.push(d); if (KAR.pairs.length > 400) KAR.pairs.shift();
+  d -= 12 * Math.round(d / 12);
+  if (Math.abs(d) <= 0.5) { const step = 0.03 / Math.max(1, S.dur); let h = KAR.hits.get(i); if (!h) KAR.hits.set(i, h = []); const l = h[h.length - 1]; if (l && frac - l[1] < step * 2 && frac >= l[0]) l[1] = Math.max(l[1], frac + step / 3); else h.push([frac, frac + step / 3]); }
+}
+// which octave you sing the song in (decided from what you actually sing, changes only when it's clear)
+function karaokeOctave() {
+  if (KAR.pairs.length < 40) return; const s = KAR.pairs.slice().sort((a, b) => a - b); const o = 12 * Math.round(s[s.length >> 1] / 12);
+  if (o === KAR.oct) { KAR.octVotes = 0; return; }
+  if (o === KAR.octCand) KAR.octVotes++; else { KAR.octCand = o; KAR.octVotes = 1; }
+  if (KAR.octVotes >= 2) { KAR.oct = o; KAR.octVotes = 0; }
+}
+function refOctave() { return KAR.oct; }
+function rrect(c, x, y, w, h, r) { r = Math.min(r, w / 2, h / 2); c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r); c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath(); }
 function drawTrace(now) {
   const dpr = window.devicePixelRatio || 1, W = trace.clientWidth, H = trace.clientHeight;
+  if (!W || !H) return;
   if (trace.width !== Math.round(W * dpr)) { trace.width = Math.round(W * dpr); trace.height = Math.round(H * dpr); }
   tctx.setTransform(dpr, 0, 0, dpr, 0, 0); tctx.clearRect(0, 0, W, H);
-  const cs = getComputedStyle(document.documentElement); const css = { getPropertyValue: (k) => cs.getPropertyValue(k).trim() };
+  const cs = getComputedStyle(document.documentElement); const css = (k) => cs.getPropertyValue(k).trim();
+  const TW = W - KEY_W;
+  const notes = S.outLen ? refNotes() : null;
+  const lane = !!(notes && notes.length && S.src && (S.playing || traceHist.some(p => p.frac != null)));
+  // song time on screen: what you hear now sits at 30% of the lane; 2.4 s of past, 5.6 s ahead
+  const AHEAD = Math.max(2.4, Math.min(5.6, TW / 95)), PAST = AHEAD * 0.43, SPAN = PAST + AHEAD;   // phones show less time, same note size
+  let nowF = null;
+  if (lane) { const p = S.playing && ctx ? tapePos(speakerTime()) : null; nowF = (p != null ? p : S.pos) / S.outLen; }
+  const songSec = S.outLen / S.sr;   // length of the rendered song in seconds (follows the speed)
+  const xF = (f) => KEY_W + TW * ((f - nowF) * songSec + PAST) / SPAN;
+  const shift = karShift() + KAR.oct;
+  // vertical window: follow the upcoming notes in lane mode, your voice otherwise
+  let target = null;
+  if (lane) {
+    const f0 = nowF - PAST / songSec, f1 = nowF + AHEAD / songSec; let lo = 1e9, hi = -1e9;
+    for (const n of notes) { if (n.b < f0) continue; if (n.a > f1) break; lo = Math.min(lo, n.m + shift); hi = Math.max(hi, n.m + shift); }
+    if (lastMidi != null) { lo = Math.min(lo, lastMidi); hi = Math.max(hi, lastMidi); }
+    if (hi >= lo) target = (lo + hi) / 2 - VIEW_SPAN / 2 + 0.5;
+  } else if (lastMidi != null) { const lo = viewLo + VIEW_SPAN * 0.2, hi = viewLo + VIEW_SPAN * 0.8; target = lastMidi < lo ? lastMidi - VIEW_SPAN * 0.2 : lastMidi > hi ? lastMidi - VIEW_SPAN * 0.8 : viewLo; }
+  if (target != null) viewLo += (target - viewLo) * (lane ? 0.06 : 0.08);
   const lo = viewLo, hi = viewLo + VIEW_SPAN, rowH = H / VIEW_SPAN;
   const yOf = (m) => H - (m + 0.5 - lo) / (hi - lo) * H;   // centre of note m
-  // vertical keyboard on the left: white keys light, black keys dark, aligned row per semitone
+  // vertical keyboard + row guides
   const cur = lastMidi != null ? Math.round(lastMidi) : null;
-  tctx.font = '10px ' + css.getPropertyValue('--mono');
+  tctx.font = '10px ' + css('--mono');
   for (let m = Math.floor(lo) - 1; m <= Math.ceil(hi) + 1; m++) {
     const y = yOf(m) - rowH / 2, black = isBlack(m);
-    tctx.fillStyle = black ? '#343a4f' : '#e9e6dc';
-    if (m === cur) tctx.fillStyle = css.getPropertyValue('--accent');
+    tctx.fillStyle = m === cur ? css('--accent') : black ? '#343a4f' : '#e9e6dc';
     tctx.fillRect(0, y, black ? KEY_W * 0.62 : KEY_W, rowH - 1);
-    // row guide across the trace
     tctx.fillStyle = black ? 'rgba(255,255,255,0.025)' : 'rgba(255,255,255,0.055)';
-    tctx.fillRect(KEY_W, y, W - KEY_W, rowH - 1);
-    if (m % 12 === 0 && !black) { tctx.fillStyle = m === cur ? css.getPropertyValue('--accent-ink') : '#555'; tctx.fillText('C' + (Math.floor(m / 12) - 1), KEY_W - 20, y + rowH - 3); }
+    tctx.fillRect(KEY_W, y, TW, rowH - 1);
+    if (m % 12 === 0 && !black) { tctx.fillStyle = m === cur ? css('--accent-ink') : '#555'; tctx.fillText('C' + (Math.floor(m / 12) - 1), KEY_W - 20, y + rowH - 3); }
   }
-  // divider
-  tctx.fillStyle = css.getPropertyValue('--line'); tctx.fillRect(KEY_W, 0, 1, H);
-  // ghost line: the reference take, aligned to song time and shifted with the key
-  if (S.ref && S.ref.points.length && S.playing && S.outLen) {
-    const shift = S.semis - S.ref.semis + refOctave(), TWg = W - KEY_W, spanG = 8000;
-    tctx.strokeStyle = 'rgba(238,240,246,0.35)'; tctx.lineWidth = 6; tctx.lineCap = 'round'; tctx.beginPath(); let on = false;
-    for (let x = KEY_W; x <= W; x += 3) {
-      const dt = (W - x) / TWg * spanG; const frac = (S.pos - dt / 1000 * S.sr) / S.outLen;
-      const m = refAt(frac); if (m == null) { on = false; continue; }
-      const yy = H - (m + shift + 0.5 - lo) / (hi - lo) * H;
-      if (!on) { tctx.moveTo(x, yy); on = true; } else tctx.lineTo(x, yy);
+  tctx.fillStyle = css('--line'); tctx.fillRect(KEY_W, 0, 1, H);
+  const good = css('--good'), acc = css('--accent'), warn = css('--warn');
+  tctx.save(); tctx.beginPath(); tctx.rect(KEY_W + 1, 0, TW, H); tctx.clip();
+  if (lane) {
+    const f0 = nowF - PAST / songSec, f1 = nowF + AHEAD / songSec, nowX = xF(nowF);
+    // loop region tint
+    if (S.loop && S.loopA != null && S.loopB != null) { tctx.fillStyle = 'rgba(255,255,255,0.03)'; const a = Math.max(KEY_W, xF(S.loopA)), b = Math.min(W, xF(S.loopB)); if (b > a) tctx.fillRect(a, 0, b - a, H); }
+    // note bars
+    const bh = Math.max(6, rowH * 0.78);
+    tctx.font = '600 10px ' + css('--mono'); tctx.textBaseline = 'middle';
+    for (let i = 0; i < notes.length; i++) {
+      const n = notes[i]; if (n.b < f0) continue; if (n.a > f1) break;
+      const x0 = xF(n.a), x1 = Math.max(x0 + 3, xF(n.b)), y = yOf(n.m + shift) - bh / 2, live = n.a <= nowF && nowF <= n.b;
+      rrect(tctx, x0, y, x1 - x0, bh, 4);
+      tctx.fillStyle = live ? 'rgba(238,240,246,0.26)' : n.b < nowF ? 'rgba(238,240,246,0.10)' : 'rgba(238,240,246,0.17)'; tctx.fill();
+      tctx.lineWidth = live ? 2 : 1; tctx.strokeStyle = live ? 'rgba(238,240,246,0.85)' : 'rgba(238,240,246,0.38)'; tctx.stroke();
+      const h = KAR.hits.get(i);
+      if (h) { tctx.save(); rrect(tctx, x0, y, x1 - x0, bh, 4); tctx.clip(); tctx.fillStyle = acc; for (const [a, b] of h) { const xa = xF(a), xb = Math.max(xa + 1.5, xF(b)); tctx.fillRect(xa, y, xb - xa, bh); } tctx.restore(); }
+      if (x1 - x0 > 26 && n.a > nowF - 0.2 / songSec) { tctx.fillStyle = 'rgba(238,240,246,0.75)'; tctx.fillText(noteName(n.m + shift), x0 + 5, y + bh / 2 + 0.5); }
     }
-    tctx.stroke();
+    // "now" line
+    tctx.fillStyle = 'rgba(238,240,246,0.5)'; tctx.fillRect(nowX - 1, 0, 2, H);
+    // your voice, placed at the song time you were hearing when you sang it
+    tctx.lineWidth = 3; tctx.lineCap = 'round'; tctx.lineJoin = 'round';
+    let prev = null, lastPt = null;
+    for (const p of traceHist) {
+      if (p.midi == null || p.frac == null || p.frac < f0 || p.frac > nowF + 0.3 / songSec) { prev = null; continue; }
+      const x = xF(p.frac), y = yOf(p.midi);
+      if (prev && (Math.abs(p.frac - prev.f) * songSec > 0.15 || x < prev.x - 2)) prev = null;
+      const k = noteAtFrac(notes, p.frac); let col = acc;
+      if (k >= 0) { let d = p.midi - (notes[k].m + karShift()); d -= 12 * Math.round(d / 12); col = Math.abs(d) <= 0.5 ? good : warn; }
+      if (prev) { tctx.strokeStyle = col; tctx.beginPath(); tctx.moveTo(prev.x, prev.y); tctx.lineTo(x, y); tctx.stroke(); }
+      prev = { x, y, f: p.frac }; lastPt = { x, y, col };
+    }
+    if (KAR.tip) { tctx.font = '12px system-ui, sans-serif'; tctx.textBaseline = 'top'; const msg = 'The song is loud in your mic · headphones make this exact'; const tw = tctx.measureText(msg).width; tctx.fillStyle = 'rgba(20,22,30,0.8)'; tctx.fillRect(W - tw - 18, 6, tw + 12, 20); tctx.fillStyle = 'rgba(238,240,246,0.8)'; tctx.fillText(msg, W - tw - 12, 10); }
+    if (lastPt && lastMidi != null) { tctx.fillStyle = lastPt.col; tctx.beginPath(); tctx.arc(lastPt.x, lastPt.y, 5, 0, Math.PI * 2); tctx.fill(); }
+  } else {
+    // free singing: the line scrolls with the clock
+    tctx.lineWidth = 2.5; tctx.lineCap = 'round'; tctx.lineJoin = 'round';
+    let prev = null; const span = 8000;
+    for (const p of traceHist) {
+      if (p.midi == null) { prev = null; continue; }
+      const x = W - (now - p.t) / span * TW, yy = yOf(p.midi);
+      const c = Math.abs(p.midi - Math.round(p.midi)) * 100;
+      tctx.strokeStyle = c <= 10 ? good : c <= 25 ? acc : warn;
+      if (prev && x > KEY_W) { tctx.beginPath(); tctx.moveTo(Math.max(KEY_W, prev.x), prev.y); tctx.lineTo(x, yy); tctx.stroke(); }
+      prev = { x, y: yy };
+    }
+    if (prev && lastMidi != null) { tctx.fillStyle = tctx.strokeStyle; tctx.beginPath(); tctx.arc(prev.x, prev.y, 4, 0, Math.PI * 2); tctx.fill(); }
+    if (S.src && !(notes && notes.length)) { tctx.fillStyle = 'rgba(238,240,246,0.45)'; tctx.font = '12px ' + 'system-ui, sans-serif'; tctx.textBaseline = 'top'; tctx.fillText('Separate the vocals to see the song’s melody here as notes.', KEY_W + 10, 8); }
   }
-  // the pitch line
-  tctx.lineWidth = 2.5; tctx.lineCap = 'round'; tctx.lineJoin = 'round';
-  let prev = null; const span = 8000, TW = W - KEY_W;
-  for (const p of traceHist) {
-    if (p.midi == null) { prev = null; continue; }
-    const x = W - (now - p.t) / span * TW, y = yOf(p.midi - 0.5 + 0.5) ;
-    const yy = H - (p.midi + 0.5 - lo) / (hi - lo) * H;
-    const c = Math.abs(p.midi - Math.round(p.midi)) * 100;
-    tctx.strokeStyle = c <= 10 ? css.getPropertyValue('--good') : c <= 25 ? css.getPropertyValue('--accent') : css.getPropertyValue('--warn');
-    if (prev && x > KEY_W) { tctx.beginPath(); tctx.moveTo(Math.max(KEY_W, prev.x), prev.y); tctx.lineTo(x, yy); tctx.stroke(); }
-    prev = { x, y: yy };
-  }
-  if (prev) { tctx.fillStyle = tctx.strokeStyle; tctx.beginPath(); tctx.arc(prev.x, prev.y, 4, 0, Math.PI * 2); tctx.fill(); }
+  tctx.restore();
 }
 // Full 88-key piano (A0 = 21 … C8 = 108). Lit key = note you are singing now; shaded band = range sung this session.
 const piano = $('piano'), pctx = piano.getContext('2d');
@@ -1537,7 +1861,7 @@ autoMic();
 document.addEventListener('pointerdown', () => { autoMic(); }, { once: true });
 
 // ---------- Offline: keep the app and the piano on the device once installed ----------
-const SHED_BUILD = '2610121609';
+const SHED_BUILD = '2610141300';
 if ('serviceWorker' in navigator && window.top === window.self && /^https?:/.test(location.protocol)) {
   navigator.serviceWorker.register('sw.js?b=' + SHED_BUILD).then(reg => { reg.update().catch(() => {}); setInterval(() => reg.update().catch(() => {}), 60 * 60 * 1000); }).catch(() => {});
   navigator.serviceWorker.addEventListener('message', (e) => { if (e.data && e.data.type === 'shed-updated' && e.data.build !== SHED_BUILD) showUpdate(); });
@@ -1565,6 +1889,7 @@ window.__ctxGet = () => ctx; Object.defineProperty(window,'__ctx',{get:()=>ctx})
 window.__sim = (pts) => { for (const p of pts) { sessionLog.push(p); traceHist.push(p); } lastMidi = pts[pts.length-1].midi; viewLo = lastMidi - 8; analyseSession(); drawPiano(); drawTrace(pts[pts.length-1].t); };
 window.__piano = async () => { const out = {}; for (const [k, v] of PIANO.cache) { try { const b = await v; out[k] = b.duration.toFixed(2); } catch (e) { out[k] = 'ERR'; } } return out; };
 window.__setRef = (points, semis) => { S.ref = { points, semis }; updateRefUI(); analyseSession(); };
+window.__lane = () => { const n = refNotes(); return { notes: n ? n.length : 0, first: n ? n.slice(0, 4).map(x => [x.a.toFixed(3), x.b.toFixed(3), x.m.toFixed(2)]) : null, hitNotes: KAR.hits.size, frames: traceHist.length, withPos: traceHist.filter(p => p.frac != null).length, voiced: traceHist.filter(p => p.midi != null).length, oct: KAR.oct, outLat, gated: tracker && tracker.stats.gated, k: tracker && tracker.k }; };
 window.__dbg = () => ({ ref: refRec ? refRec.points.length : null, saved: S.ref ? S.ref.points.length : null, log: sessionLog.length, voiced: sessionLog.filter(p=>p.frac!=null).length, playing: S.playing, loops: S.loops, pos: S.pos/S.outLen });
 window.__shed = () => { if (!S.out) return null; const o = S.out[0], a = Math.floor(S.outLen * 0.4), b = Math.floor(S.outLen * 0.6); let z = 0; for (let i = a + 1; i < b; i++) if (o[i - 1] < 0 && o[i] >= 0) z++; return { hz: z / ((b - a) / S.sr), outLen: S.outLen, ready: Array.from(S.ready) }; };
 })();

@@ -270,3 +270,204 @@ function trackMelody(x, sr, opts = {}) {
   return pts;
 }
 if (typeof module !== 'undefined') module.exports.trackMelody = trackMelody;
+
+// ---------- Live pitch tracker (streaming) ----------
+// Same core as trackMelody (McLeod NSDF via FFT autocorrelation) plus what a live monitor needs:
+// 60 Hz high-pass, adaptive noise floor, clarity hysteresis for voicing, onset confirmation,
+// octave-jump confirmation and a 3-frame median. Feed any block size; emits one frame per hop.
+class LivePitch {
+  constructor(sr, opts = {}) {
+    this.sr = sr; this.N = 2048; this.H = opts.hop || 512; this.M = 4096; this.fft = makeFFT(this.M);
+    this.re = new Float32Array(this.M); this.im = new Float32Array(this.M); this.cum = new Float64Array(this.N + 1);
+    this.buf = new Float32Array(this.N); this.fill = 0; this.sinceHop = 0; this.w = 0;
+    this.lagMin = Math.floor(sr / 1500); this.lagMax = Math.min(this.N - 2, Math.ceil(sr / 62));
+    this.nsdf = new Float32Array(this.lagMax + 2);
+    // 2nd-order Butterworth high-pass at 60 Hz
+    const w0 = 2 * Math.PI * 60 / sr, cw = Math.cos(w0), al = Math.sin(w0) / (2 * Math.SQRT1_2), a0 = 1 + al;
+    this.hp = { b0: (1 + cw) / 2 / a0, b1: -(1 + cw) / a0, b2: (1 + cw) / 2 / a0, a1: -2 * cw / a0, a2: (1 - al) / a0, x1: 0, x2: 0, y1: 0, y2: 0 };
+    this.floor = 1e-3; this.voiced = false; this.onset = 0; this.prev = null; this.pend = null; this.med = [];
+  }
+  // Song-bleed model: when the song plays through speakers the mic hears it too. We know exactly what the
+  // song is, so we learn how loud it arrives at the mic (coupling) and only accept a pitch whose harmonics
+  // stand clearly above what the song alone would put there.
+  setRef(refWin) { this.refWin = refWin; }
+  harmonicSalience(magSq, f0, binHz) { let s = 0; for (let h = 1; h <= 8; h++) { const k = Math.round(h * f0 / binHz); if (k >= magSq.length - 1) break; s += Math.sqrt(Math.max(magSq[k - 1], magSq[k], magSq[k + 1])); } return s; }
+  // returns raw estimate {midi, clarity, rms} or null for the current window
+  analyse() {
+    const { N, M, re, im, cum, nsdf, lagMin, lagMax } = this; const x = this.buf;
+    let e = 0; for (let i = 0; i < N; i++) { const v = x[i]; re[i] = v; im[i] = 0; e += v * v; } for (let i = N; i < M; i++) { re[i] = 0; im[i] = 0; }
+    const rms = Math.sqrt(e / N);
+    // adaptive noise floor: falls fast, rises slowly (≈ 3 s), so it tracks the room, not the voice
+    this.floor = rms < this.floor ? 0.7 * this.floor + 0.3 * rms : this.floor * 1.004 + 1e-7;
+    const gate = Math.max(this.floor * 3.2, 4e-4);
+    if (rms < gate) return { midi: null, clarity: 0, rms };
+    // song bleed: compare against the reference (what the speakers are playing right now)
+    let refRms = 0, refPow = null;
+    if (this.refWin) { const r = this.refWin; let e2 = 0; for (let i = 0; i < r.length; i++) e2 += r[i] * r[i]; refRms = Math.sqrt(e2 / r.length);
+      if (refRms > 1e-5) { const ratio = rms / refRms;
+        // coupling = how loud the song arrives at the mic; min-tracker that rises slowly (headphones → it learns ≈0)
+        this.coupling = this.coupling == null ? Math.min(ratio, 0.3) : ratio < this.coupling ? 0.85 * this.coupling + 0.15 * ratio : this.coupling * 1.0006;
+        if (rms < 2.0 * this.coupling * refRms) return { midi: null, clarity: 0, rms, bleed: true };
+        const rr = this.rre || (this.rre = new Float32Array(M)), ri = this.rim || (this.rim = new Float32Array(M)), w = this.win || (this.win = (() => { const a = new Float32Array(N); for (let i = 0; i < N; i++) a[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / N); return a; })());
+        for (let i = 0; i < N; i++) { rr[i] = r[i] * w[i]; ri[i] = 0; } for (let i = N; i < M; i++) { rr[i] = 0; ri[i] = 0; } this.fft(rr, ri, false);
+        refPow = new Float32Array(M / 2); for (let i = 0; i < M / 2; i++) refPow[i] = rr[i] * rr[i] + ri[i] * ri[i];
+      } }
+    const micPow = new Float32Array(M / 2);
+    if (refPow) { const mr = this.mre || (this.mre = new Float32Array(M)), mi = this.mim || (this.mim = new Float32Array(M)), w = this.win; for (let i = 0; i < N; i++) { mr[i] = x[i] * w[i]; mi[i] = 0; } for (let i = N; i < M; i++) { mr[i] = 0; mi[i] = 0; } this.fft(mr, mi, false); for (let i = 0; i < M / 2; i++) micPow[i] = mr[i] * mr[i] + mi[i] * mi[i]; }
+    this.fft(re, im, false); for (let i = 0; i < M; i++) { re[i] = re[i] * re[i] + im[i] * im[i]; im[i] = 0; } this.fft(re, im, true);
+    cum[0] = 0; for (let i = 0; i < N; i++) cum[i + 1] = cum[i] + x[i] * x[i];
+    let maxV = 0;
+    for (let tau = lagMin; tau <= lagMax + 1; tau++) { const m = cum[N - tau] + (cum[N] - cum[tau]); const v = m > 0 ? 2 * (re[tau] / M) / m : 0; nsdf[tau] = v; if (tau <= lagMax && v > maxV) maxV = v; }
+    if (maxV < 0.45) return { midi: null, clarity: maxV, rms };
+    const thr = maxV * 0.88; let best = -1;
+    for (let tau = lagMin + 1; tau <= lagMax; tau++) if (nsdf[tau] > nsdf[tau - 1] && nsdf[tau] >= nsdf[tau + 1] && nsdf[tau] >= thr) { best = tau; break; }
+    if (best < 0) return { midi: null, clarity: maxV, rms };
+    const a = nsdf[best - 1], b = nsdf[best], c = nsdf[best + 1]; const den = a - 2 * b + c; const shift = den ? (a - c) / (2 * den) : 0;
+    const f0 = this.sr / (best + Math.max(-0.5, Math.min(0.5, shift)));
+    if (refPow) {   // is this pitch the singer, or the song coming out of the speakers?
+      const binHz = this.sr / M; const sm = this.harmonicSalience(micPow, f0, binHz), sr2 = this.harmonicSalience(refPow, f0, binHz) * this.coupling;
+      if (sm < 2.2 * sr2) return { midi: null, clarity: b, rms, bleed: true };
+    }
+    return { midi: 69 + 12 * Math.log2(f0 / 440), clarity: b, rms };
+  }
+  // continuity, hysteresis and smoothing on top of the raw estimate
+  decide(r) {
+    const onThr = 0.72, offThr = 0.5;
+    let m = r.midi != null && r.clarity >= (this.voiced ? offThr : onThr) ? r.midi : null;
+    if (m == null) { this.voiced = false; this.onset = 0; this.prev = null; this.pend = null; this.med.length = 0; return null; }
+    if (!this.voiced) { this.onset++; if (this.onset < 2) { this.prev = m; return null; } this.voiced = true; }
+    if (this.prev != null) {
+      const d = m - this.prev;
+      if (Math.abs(Math.abs(d) - 12) < 0.8 || Math.abs(Math.abs(d) - 19) < 0.8) {      // octave or octave+fifth jump: confirm before accepting
+        if (this.pend && Math.abs(this.pend.m - m) < 0.8) this.pend.n++; else this.pend = { m, n: 1 };
+        if (this.pend.n < 3) m = this.prev; else this.pend = null;
+      } else this.pend = null;
+    }
+    this.prev = m; this.med.push(m); if (this.med.length > 3) this.med.shift();
+    const s = this.med.slice().sort((p, q) => p - q); return s[s.length >> 1];
+  }
+  // push samples; calls onFrame(midiOrNull, rms) once per hop
+  push(samples, onFrame, ref) {
+    const hp = this.hp, N = this.N, H = this.H, b = this.buf;
+    const rring = ref ? (this.rring || (this.rring = new Float32Array(N))) : null, rb = ref ? (this.rbuf || (this.rbuf = new Float32Array(N))) : null;
+    if (!ref) this.refWin = null;
+    for (let i = 0; i < samples.length; i++) {
+      if (rring) rring[this.w] = ref[i];
+      const x0 = samples[i]; const y = hp.b0 * x0 + hp.b1 * hp.x1 + hp.b2 * hp.x2 - hp.a1 * hp.y1 - hp.a2 * hp.y2; hp.x2 = hp.x1; hp.x1 = x0; hp.y2 = hp.y1; hp.y1 = y;
+      const ring = this.ring || (this.ring = new Float32Array(N)); ring[this.w] = y; this.w = (this.w + 1) % N; if (this.fill < N) this.fill++;
+      if (this.fill === N && ++this.sinceHop >= H) { this.sinceHop = 0; const w = this.w; b.set(ring.subarray(w), 0); b.set(ring.subarray(0, w), N - w);
+        if (rring) { rb.set(rring.subarray(w), 0); rb.set(rring.subarray(0, w), N - w); this.refWin = rb; }
+        const r = this.analyse(); onFrame(this.decide(r), r.rms, i, r); }
+    }
+  }
+}
+if (typeof module !== 'undefined') module.exports.LivePitch = LivePitch;
+
+// ---------- Sing tracker: the singer's pitch while the song plays through speakers ----------
+// Karaoke-machine logic, kept simple and predictable:
+//  1) Precise time-domain pitch (McLeod NSDF) of the mic, like the original monitor.
+//  2) Shed knows how loud the song is at every moment. It learns how much of it reaches the mic
+//     (a low percentile of mic/song level over the last seconds — the moments you are not singing),
+//     and only believes the mic when it is clearly louder than that leak.
+//  3) In the grey zone (voice only a little above the leak) the pitch must not be one the song itself is
+//     sounding right now. With headphones the leak learns ≈ 0 and nothing is gated.
+class SingTracker extends LivePitch {
+  constructor(sr, opts = {}) {
+    super(sr, opts);
+    this.hist = new Float32Array(700); this.nh = 0; this.ih = 0; this.k = null; this.kAt = 0;
+    this.songH = new Float32Array(Math.max(8, Math.round(0.3 * sr / this.H))); this.si = 0;
+    this.room = null; this.stats = { gated: 0 }; this.P = Object.assign({ gate: 1.7, strong: 3, sal: 3, pct: 0.1, onset: 4, leak: 'min', cohEvery: 4, cohMargin: 1.3, cohTau: 4, cohNeff: 1 }, opts);
+  }
+  // Leak by coherence (what an echo canceller does): average the cross-spectrum of mic and song over ~3 s.
+  // Your voice is unrelated to the song's waveform and averages out; only the song's own sound in the mic remains.
+  coh(mic, song) {
+    const L = 8192, sr = this.sr;
+    if (!this.cz) { this.cz = { f: makeFFT(L), ar: new Float32Array(L), ai: new Float32Array(L), br: new Float32Array(L), bi: new Float32Array(L), w: new Float32Array(L), xr: new Float64Array(L / 2), xi: new Float64Array(L / 2), yy: new Float64Array(L / 2), xx: new Float64Array(L / 2), n: 0 }; for (let i = 0; i < L; i++) this.cz.w[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / L); }
+    const c = this.cz, { ar, ai, br, bi, w } = c;
+    for (let i = 0; i < L; i++) { ar[i] = mic[i] * w[i]; ai[i] = 0; br[i] = song[i] * w[i]; bi[i] = 0; }
+    c.f(ar, ai, false); c.f(br, bi, false);
+    const tau = this.P.cohTau, a = 1 - Math.exp(-(this.H * this.P.cohEvery / sr) / tau), Neff = Math.max(1, Math.min(this.P.cohNeff * tau * sr / (L / 2), (this.cz.n + 1) * this.H * this.P.cohEvery / (L / 2))), k0 = Math.floor(120 * L / sr), k1 = Math.floor(5000 * L / sr);
+    let B = 0, Y = 0;
+    for (let k = k0; k < k1; k++) {
+      // mic × conj(song)
+      const xr = ar[k] * br[k] + ai[k] * bi[k], xi = ai[k] * br[k] - ar[k] * bi[k], yy = br[k] * br[k] + bi[k] * bi[k], xx = ar[k] * ar[k] + ai[k] * ai[k];
+      c.xr[k] += a * (xr - c.xr[k]); c.xi[k] += a * (xi - c.xi[k]); c.yy[k] += a * (yy - c.yy[k]); c.xx[k] += a * (xx - c.xx[k]);
+      // minus the part a finite average leaves behind by chance (|Sxy|² bias ≈ Sxx·Syy / independent frames)
+      if (c.yy[k] > 0) B += Math.max(0, c.xr[k] * c.xr[k] + c.xi[k] * c.xi[k] - c.xx[k] * c.yy[k] / Neff) / c.yy[k]; Y += c.yy[k];
+    }
+    c.n++;
+    if (c.n > 20 && Y > 0) this.kc = Math.sqrt(B / Y);
+  }
+  leak() {   // 10th percentile of mic/song ratio over ~8 s, recomputed every 16 frames
+    if (this.P.leak === 'coh') return this.kc == null ? null : (this.k = this.kc * this.P.cohMargin);
+    if (this.nh < 40) return this.k;
+    if (++this.kAt % 16 === 0 || this.kp == null) { const a = Array.from(this.hist.subarray(0, this.nh)).sort((p, q) => p - q); this.kp = a[Math.floor(a.length * this.P.pct)]; }
+    // the percentile can mistake a singer who never pauses for leak; coherence can't, so it caps it
+    this.k = this.P.leak === 'min' && this.kc != null ? Math.min(this.kp, this.kc * this.P.cohMargin) : this.kp;
+    return this.k;
+  }
+  analyse() {
+    const { N, M, re, im, cum, nsdf, lagMin, lagMax } = this; const x = this.buf;
+    let e = 0; for (let i = 0; i < N; i++) { const v = x[i]; re[i] = v; im[i] = 0; e += v * v; } for (let i = N; i < M; i++) { re[i] = 0; im[i] = 0; }
+    const rms = Math.sqrt(e / N); this.stats.frames = (this.stats.frames || 0) + 1;
+    // song level now (max over the last 300 ms covers any speaker/latency delay)
+    let songRms = 0; if (this.refWin) { const r = this.refWin; let e2 = 0; for (let i = N >> 1; i < N; i++) e2 += r[i] * r[i]; songRms = Math.sqrt(e2 / (N >> 1)); }
+    this.songH[this.si] = songRms; this.si = (this.si + 1) % this.songH.length; let songMax = 0; for (const v of this.songH) if (v > songMax) songMax = v;
+    const songOn = songMax > 2e-4;
+    // room noise floor, learned only while the song is not playing
+    if (!songOn) this.room = this.room == null ? 1e-3 : rms < this.room ? 0.6 * this.room + 0.4 * rms : Math.min(4e-3, this.room * 1.0008);   // starts low, rises slowly, capped below singing level
+    if (songOn) { this.hist[this.ih] = rms / songMax; this.ih = (this.ih + 1) % this.hist.length; if (this.nh < this.hist.length) this.nh++; }
+    const gate = Math.max(6e-4, (this.room || 0) * 2.5);
+    if (rms < gate) return { midi: null, clarity: 0, rms };
+    let bleed = 0, strong = true;
+    if (songOn) {
+      const k = this.leak(); if (k != null) { bleed = k * songMax; if (rms < this.P.gate * bleed) { this.stats.gated++; return { midi: null, clarity: 0, rms, bleed: true }; } strong = rms > this.P.strong * bleed; }
+      else strong = false;
+    }
+    this.fft(re, im, false); for (let i = 0; i < M; i++) { re[i] = re[i] * re[i] + im[i] * im[i]; im[i] = 0; } this.fft(re, im, true);
+    cum[0] = 0; for (let i = 0; i < N; i++) cum[i + 1] = cum[i] + x[i] * x[i];
+    let maxV = 0;
+    for (let tau = lagMin; tau <= lagMax + 1; tau++) { const m = cum[N - tau] + (cum[N] - cum[tau]); const v = m > 0 ? 2 * (re[tau] / M) / m : 0; nsdf[tau] = v; if (tau <= lagMax && v > maxV) maxV = v; }
+    if (maxV < 0.5) return { midi: null, clarity: maxV, rms };
+    const thr = maxV * 0.88; let best = -1;
+    for (let tau = lagMin + 1; tau <= lagMax; tau++) if (nsdf[tau] > nsdf[tau - 1] && nsdf[tau] >= nsdf[tau + 1] && nsdf[tau] >= thr) { best = tau; break; }
+    if (best < 0) return { midi: null, clarity: maxV, rms };
+    const a = nsdf[best - 1], b = nsdf[best], c = nsdf[best + 1]; const den = a - 2 * b + c; const shift = den ? (a - c) / (2 * den) : 0;
+    const f0 = this.sr / (best + Math.max(-0.5, Math.min(0.5, shift)));
+    if (songOn && !strong) {
+      // grey zone: is this pitch already sounding in the song? compare harmonic energy mic vs song
+      const w = this.win || (this.win = (() => { const q = new Float32Array(N); for (let i = 0; i < N; i++) q[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / N); return q; })());
+      const mr = this.mre || (this.mre = new Float32Array(M)), mi = this.mim || (this.mim = new Float32Array(M)), rr = this.rre || (this.rre = new Float32Array(M)), ri = this.rim || (this.rim = new Float32Array(M));
+      const r = this.refWin; for (let i = 0; i < N; i++) { mr[i] = x[i] * w[i]; mi[i] = 0; rr[i] = r[i] * w[i]; ri[i] = 0; } for (let i = N; i < M; i++) { mr[i] = mi[i] = rr[i] = ri[i] = 0; }
+      this.fft(mr, mi, false); this.fft(rr, ri, false);
+      const mp = this.mp || (this.mp = new Float32Array(M / 2)), rp = this.rp || (this.rp = new Float32Array(M / 2));
+      for (let i = 0; i < M / 2; i++) { mp[i] = mr[i] * mr[i] + mi[i] * mi[i]; rp[i] = rr[i] * rr[i] + ri[i] * ri[i]; }
+      const binHz = this.sr / M, sm = this.harmonicSalience(mp, f0, binHz), ss = this.harmonicSalience(rp, f0, binHz) * (this.k || 1) * (songMax / Math.max(1e-6, songRms));
+      if (sm < this.P.sal * ss) { this.stats.gated++; return { midi: null, clarity: b, rms, bleed: true }; }
+    }
+    return { midi: 69 + 12 * Math.log2(f0 / 440), clarity: b, rms, songOn };
+  }
+  push(samples, onFrame, ref) {
+    if (ref && this.P.leak !== 'pct') {
+      const L = 8192, lag = Math.round(0.02 * this.sr);   // song window starts 20 ms earlier (mic input latency)
+      if (!this.lm) { this.lm = new Float32Array(L); this.ls = new Float32Array(L + lag); this.lw = 0; this.lcount = 0; this.lin1 = new Float32Array(L); this.lin2 = new Float32Array(L); this.lag = lag; }
+      for (let i = 0; i < samples.length; i++) {
+        this.lm[this.lw % L] = samples[i]; this.ls[this.lw % (L + lag)] = ref[i]; this.lw++;
+        if (this.lw >= L + lag && ++this.lcount >= this.H * this.P.cohEvery) {
+          this.lcount = 0; let songOn = false;
+          for (let j = 0; j < L; j++) { this.lin1[j] = this.lm[(this.lw - L + j) % L]; const v = this.ls[(this.lw - L - lag + j) % (L + lag)]; this.lin2[j] = v; if (v !== 0) songOn = true; }
+          if (songOn) this.coh(this.lin1, this.lin2);
+        }
+      }
+    }
+    super.push(samples, onFrame, ref);
+  }
+  decide(r) {   // stricter voicing while the song plays
+    if (r.midi != null && r.songOn && r.clarity < (this.voiced ? 0.6 : 0.8)) r = { midi: null, clarity: r.clarity, rms: r.rms };
+    // while the song plays, a new phrase must hold for a few frames before it is shown (kills one-frame blips)
+    if (r.midi != null && !this.voiced && r.songOn) { this.on2 = (this.on2 || 0) + 1; if (this.on2 < this.P.onset) { this.prev = r.midi; return null; } }
+    if (r.midi == null) this.on2 = 0;
+    return super.decide(r);
+  }
+}
+if (typeof module !== 'undefined') module.exports.SingTracker = SingTracker;
