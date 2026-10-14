@@ -2,7 +2,7 @@
 //  • App shell + engine code: network first, cached copy only when offline (so updates arrive on the next open).
 //  • Piano samples, models, icons: cache first (large, immutable).
 //  • Tells open pages when a new version has been installed so they can offer a reload.
-const BUILD = '2610121609';
+const BUILD = '2610140056';
 const SHELL = 'shed-shell-' + BUILD, MEDIA = 'shed-media-v1';
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(SHELL).then(c => c.addAll(['./', './index.html', './manifest.webmanifest', './demucs/shed-demucs.js']).catch(() => {}))); self.skipWaiting(); });
 self.addEventListener('activate', (e) => {

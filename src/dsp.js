@@ -270,3 +270,68 @@ function trackMelody(x, sr, opts = {}) {
   return pts;
 }
 if (typeof module !== 'undefined') module.exports.trackMelody = trackMelody;
+
+// ---------- Live pitch tracker (streaming) ----------
+// Same core as trackMelody (McLeod NSDF via FFT autocorrelation) plus what a live monitor needs:
+// 60 Hz high-pass, adaptive noise floor, clarity hysteresis for voicing, onset confirmation,
+// octave-jump confirmation and a 3-frame median. Feed any block size; emits one frame per hop.
+class LivePitch {
+  constructor(sr, opts = {}) {
+    this.sr = sr; this.N = 2048; this.H = opts.hop || 512; this.M = 4096; this.fft = makeFFT(this.M);
+    this.re = new Float32Array(this.M); this.im = new Float32Array(this.M); this.cum = new Float64Array(this.N + 1);
+    this.buf = new Float32Array(this.N); this.fill = 0; this.sinceHop = 0; this.w = 0;
+    this.lagMin = Math.floor(sr / 1500); this.lagMax = Math.min(this.N - 2, Math.ceil(sr / 62));
+    this.nsdf = new Float32Array(this.lagMax + 2);
+    // 2nd-order Butterworth high-pass at 60 Hz
+    const w0 = 2 * Math.PI * 60 / sr, cw = Math.cos(w0), al = Math.sin(w0) / (2 * Math.SQRT1_2), a0 = 1 + al;
+    this.hp = { b0: (1 + cw) / 2 / a0, b1: -(1 + cw) / a0, b2: (1 + cw) / 2 / a0, a1: -2 * cw / a0, a2: (1 - al) / a0, x1: 0, x2: 0, y1: 0, y2: 0 };
+    this.floor = 1e-3; this.voiced = false; this.onset = 0; this.prev = null; this.pend = null; this.med = [];
+  }
+  // returns raw estimate {midi, clarity, rms} or null for the current window
+  analyse() {
+    const { N, M, re, im, cum, nsdf, lagMin, lagMax } = this; const x = this.buf;
+    let e = 0; for (let i = 0; i < N; i++) { const v = x[i]; re[i] = v; im[i] = 0; e += v * v; } for (let i = N; i < M; i++) { re[i] = 0; im[i] = 0; }
+    const rms = Math.sqrt(e / N);
+    // adaptive noise floor: falls fast, rises slowly (≈ 3 s), so it tracks the room, not the voice
+    this.floor = rms < this.floor ? 0.7 * this.floor + 0.3 * rms : this.floor * 1.004 + 1e-7;
+    const gate = Math.max(this.floor * 3.2, 4e-4);
+    if (rms < gate) return { midi: null, clarity: 0, rms };
+    this.fft(re, im, false); for (let i = 0; i < M; i++) { re[i] = re[i] * re[i] + im[i] * im[i]; im[i] = 0; } this.fft(re, im, true);
+    cum[0] = 0; for (let i = 0; i < N; i++) cum[i + 1] = cum[i] + x[i] * x[i];
+    let maxV = 0;
+    for (let tau = lagMin; tau <= lagMax + 1; tau++) { const m = cum[N - tau] + (cum[N] - cum[tau]); const v = m > 0 ? 2 * (re[tau] / M) / m : 0; nsdf[tau] = v; if (tau <= lagMax && v > maxV) maxV = v; }
+    if (maxV < 0.45) return { midi: null, clarity: maxV, rms };
+    const thr = maxV * 0.88; let best = -1;
+    for (let tau = lagMin + 1; tau <= lagMax; tau++) if (nsdf[tau] > nsdf[tau - 1] && nsdf[tau] >= nsdf[tau + 1] && nsdf[tau] >= thr) { best = tau; break; }
+    if (best < 0) return { midi: null, clarity: maxV, rms };
+    const a = nsdf[best - 1], b = nsdf[best], c = nsdf[best + 1]; const den = a - 2 * b + c; const shift = den ? (a - c) / (2 * den) : 0;
+    const f0 = this.sr / (best + Math.max(-0.5, Math.min(0.5, shift)));
+    return { midi: 69 + 12 * Math.log2(f0 / 440), clarity: b, rms };
+  }
+  // continuity, hysteresis and smoothing on top of the raw estimate
+  decide(r) {
+    const onThr = 0.72, offThr = 0.5;
+    let m = r.midi != null && r.clarity >= (this.voiced ? offThr : onThr) ? r.midi : null;
+    if (m == null) { this.voiced = false; this.onset = 0; this.prev = null; this.pend = null; this.med.length = 0; return null; }
+    if (!this.voiced) { this.onset++; if (this.onset < 2) { this.prev = m; return null; } this.voiced = true; }
+    if (this.prev != null) {
+      const d = m - this.prev;
+      if (Math.abs(Math.abs(d) - 12) < 0.8 || Math.abs(Math.abs(d) - 19) < 0.8) {      // octave or octave+fifth jump: confirm before accepting
+        if (this.pend && Math.abs(this.pend.m - m) < 0.8) this.pend.n++; else this.pend = { m, n: 1 };
+        if (this.pend.n < 3) m = this.prev; else this.pend = null;
+      } else this.pend = null;
+    }
+    this.prev = m; this.med.push(m); if (this.med.length > 3) this.med.shift();
+    const s = this.med.slice().sort((p, q) => p - q); return s[s.length >> 1];
+  }
+  // push samples; calls onFrame(midiOrNull, rms) once per hop
+  push(samples, onFrame) {
+    const hp = this.hp, N = this.N, H = this.H, b = this.buf;
+    for (let i = 0; i < samples.length; i++) {
+      const x0 = samples[i]; const y = hp.b0 * x0 + hp.b1 * hp.x1 + hp.b2 * hp.x2 - hp.a1 * hp.y1 - hp.a2 * hp.y2; hp.x2 = hp.x1; hp.x1 = x0; hp.y2 = hp.y1; hp.y1 = y;
+      const ring = this.ring || (this.ring = new Float32Array(N)); ring[this.w] = y; this.w = (this.w + 1) % N; if (this.fill < N) this.fill++;
+      if (this.fill === N && ++this.sinceHop >= H) { this.sinceHop = 0; const w = this.w; b.set(ring.subarray(w), 0); b.set(ring.subarray(0, w), N - w); const r = this.analyse(); onFrame(this.decide(r), r.rms, i); }
+    }
+  }
+}
+if (typeof module !== 'undefined') module.exports.LivePitch = LivePitch;
