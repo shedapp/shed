@@ -9,7 +9,7 @@
   const ORT_VERSION = '1.22.0', ORT_BASE = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@' + ORT_VERSION + '/dist/';
   const inWorker = typeof importScripts === 'function';
 
-  // ---------- FFT: radix-2, plus N = m·2^k (m = 3 or 5) for the karaoke model ----------
+  // ---------- FFT: radix-2, plus N = m·2^k (m odd) for the MDX models (5120 = 5·1024, 7680 = 15·512) ----------
   function makeFFT(n) {
     const levels = Math.log2(n) | 0; const cosT = new Float32Array(n / 2), sinT = new Float32Array(n / 2);
     for (let i = 0; i < n / 2; i++) { cosT[i] = Math.cos(2 * Math.PI * i / n); sinT[i] = Math.sin(2 * Math.PI * i / n); }
@@ -21,7 +21,7 @@
     };
   }
   function makeFFTmixed(N) {
-    let m = 1; for (const c of [5, 3]) if (N % c === 0 && Number.isInteger(Math.log2(N / c))) { m = c; break; }
+    let P2 = N; while (P2 % 2 === 0) P2 /= 2; const m = P2;   // N = m · 2^k, m odd (15 for the 7680-point vocal models, 5 for Karaoke 2)
     if (m === 1) return makeFFT(N);
     const P = N / m, sub = makeFFT(P);
     const cosN = new Float32Array(N), sinN = new Float32Array(N); for (let i = 0; i < N; i++) { cosN[i] = Math.cos(2 * Math.PI * i / N); sinN[i] = Math.sin(2 * Math.PI * i / N); }
@@ -100,14 +100,14 @@
     return [oL, oR];
   }
   // ---------- MDX host math (pure) ----------
-  function mdxSpek(L, R, nfft) {
-    const T = MDX.DIM_T, F = MDX.DIM_F; const S = stft2(L, R, nfft, MDX.HOP, false);
+  function mdxSpek(L, R, nfft, dimF) {
+    const T = MDX.DIM_T, F = dimF || MDX.DIM_F; const S = stft2(L, R, nfft, MDX.HOP, false);
     const out = new Float32Array(4 * F * T);
     for (let t = 0; t < T; t++) { const b = t * S.half; for (let k = 3; k < F; k++) { out[(0 * F + k) * T + t] = S.Ar[b + k]; out[(1 * F + k) * T + t] = S.Ai[b + k]; out[(2 * F + k) * T + t] = S.Br[b + k]; out[(3 * F + k) * T + t] = S.Bi[b + k]; } }
     return out;
   }
-  function mdxWave(spek, nfft, len) {
-    const T = MDX.DIM_T, F = MDX.DIM_F, half = nfft / 2 + 1;
+  function mdxWave(spek, nfft, len, dimF) {
+    const T = MDX.DIM_T, F = dimF || MDX.DIM_F, half = nfft / 2 + 1;
     const Ar = new Float32Array(T * half), Ai = new Float32Array(T * half), Br = new Float32Array(T * half), Bi = new Float32Array(T * half);
     for (let t = 0; t < T; t++) { const b = t * half; for (let k = 0; k < F; k++) { Ar[b + k] = spek[(0 * F + k) * T + t]; Ai[b + k] = spek[(1 * F + k) * T + t]; Br[b + k] = spek[(2 * F + k) * T + t]; Bi[b + k] = spek[(3 * F + k) * T + t]; } }
     return istft2(Ar, Ai, Br, Bi, T, nfft, MDX.HOP, false, len);
@@ -133,8 +133,8 @@
       const { id, op } = e.data; let r, tr = [];
       if (op === 'demucsPrep') { r = demucsPrep(e.data.L, e.data.R); tr = [r.mix.buffer, r.zcac.buffer]; }
       else if (op === 'demucsPost') { const [a, b] = demucsPost(e.data.zv, e.data.tv, e.data.m2, e.data.d); r = { L: a, R: b }; tr = [a.buffer, b.buffer]; }
-      else if (op === 'mdxSpek') { const s = mdxSpek(e.data.L, e.data.R, e.data.nfft); r = { spek: s }; tr = [s.buffer]; }
-      else if (op === 'mdxWave') { const [a, b] = mdxWave(e.data.spek, e.data.nfft, e.data.len); r = { L: a, R: b }; tr = [a.buffer, b.buffer]; }
+      else if (op === 'mdxSpek') { const s = mdxSpek(e.data.L, e.data.R, e.data.nfft, e.data.dimF); r = { spek: s }; tr = [s.buffer]; }
+      else if (op === 'mdxWave') { const [a, b] = mdxWave(e.data.spek, e.data.nfft, e.data.len, e.data.dimF); r = { L: a, R: b }; tr = [a.buffer, b.buffer]; }
       self.postMessage({ id, r }, tr);
     };
     root.ShedDemucs = api; return;
@@ -222,24 +222,25 @@
     for (let i = 0; i < T; i++) { const w = ws[i] || 1; vL[i] = vL[i] / w * std + mean; vR[i] = vR[i] / w * std + mean; }
     return [vL, vR];
   }
-  // Karaoke model primary stem (band + backing vocals). Lead vocal = mix − result.
-  async function separateKaraoke(inL, inR, sr, modelUrl, params, onProgress, opts) {
+  // Any UVR MDX-Net model → its primary stem. params {nfft, dimF, compensate}. Vocal models (Kim_Vocal_2, Voc_FT) return the
+  // vocals; Karaoke 2 returns band + backing vocals (lead = mix − result).
+  async function separateMDX(inL, inR, sr, modelUrl, params, onProgress, opts) {
     opts = Object.assign({ denoise: false, overlap: 0.25 }, opts || {});
-    const sess = await getSession('kara', [modelUrl], onProgress); const ort = root.ort;
-    const nfft = params.nfft, comp = params.compensate, overlap = opts.overlap;
+    const sess = await getSession(modelUrl, [modelUrl], onProgress); const ort = root.ort;
+    const nfft = params.nfft, comp = params.compensate, overlap = opts.overlap, dimF = params.dimF || MDX.DIM_F;
     let L = inL, R = inR; const ratio = sr / SR; if (Math.abs(ratio - 1) > 1e-6) { L = resample(inL, ratio); R = resample(inR, ratio); }
     const T = L.length, chunk = MDX.HOP * (MDX.DIM_T - 1), trim = nfft >> 1, step = Math.floor(chunk * (1 - overlap));
     const padLen = trim + T + chunk; const mL = new Float32Array(padLen), mR = new Float32Array(padLen); mL.set(L, trim); mR.set(R, trim);
     const rL = new Float32Array(padLen), rR = new Float32Array(padLen), div = new Float32Array(padLen); const win = getWin(chunk);
     const offs = []; for (let i = 0; i < trim + T; i += step) offs.push(i); const nCh = offs.length; const t0 = performance.now();
-    const prep = (i) => { const cL = mL.slice(i, i + chunk), cR = mR.slice(i, i + chunk); return job('mdxSpek', { L: cL, R: cR, nfft }, [cL.buffer, cR.buffer]).then(r => ({ spek: r.spek, i })); };
+    const prep = (i) => { const cL = mL.slice(i, i + chunk), cR = mR.slice(i, i + chunk); return job('mdxSpek', { L: cL, R: cR, nfft, dimF }, [cL.buffer, cR.buffer]).then(r => ({ spek: r.spek, i })); };
     let prepNext = prep(offs[0]); const posts = []; let done = 0;
     for (let c = 0; c < nCh; c++) {
       const cur = await prepNext; if (c + 1 < nCh) prepNext = prep(offs[c + 1]);
-      const res = await sess.run({ input: new ort.Tensor('float32', cur.spek, [1, 4, MDX.DIM_F, MDX.DIM_T]) });
+      const res = await sess.run({ input: new ort.Tensor('float32', cur.spek, [1, 4, dimF, MDX.DIM_T]) });
       const out = res.output.data.slice();
-      if (opts.denoise) { const neg = cur.spek; for (let q = 0; q < neg.length; q++) neg[q] = -neg[q]; const r2 = await sess.run({ input: new ort.Tensor('float32', neg, [1, 4, MDX.DIM_F, MDX.DIM_T]) }); const o2 = r2.output.data; for (let q = 0; q < out.length; q++) out[q] = 0.5 * (out[q] - o2[q]); }
-      posts.push(job('mdxWave', { spek: out, nfft, len: chunk }, [out.buffer]).then(r => { const n = Math.min(chunk, padLen - cur.i); for (let j = 0; j < n; j++) { rL[cur.i + j] += r.L[j] * win[j]; rR[cur.i + j] += r.R[j] * win[j]; div[cur.i + j] += win[j]; } done++; if (onProgress) { const el = (performance.now() - t0) / 1000; onProgress('separate', done / nCh, el / done * (nCh - done)); } }));
+      if (opts.denoise) { const neg = cur.spek; for (let q = 0; q < neg.length; q++) neg[q] = -neg[q]; const r2 = await sess.run({ input: new ort.Tensor('float32', neg, [1, 4, dimF, MDX.DIM_T]) }); const o2 = r2.output.data; for (let q = 0; q < out.length; q++) out[q] = 0.5 * (out[q] - o2[q]); }
+      posts.push(job('mdxWave', { spek: out, nfft, len: chunk, dimF }, [out.buffer]).then(r => { const n = Math.min(chunk, padLen - cur.i); for (let j = 0; j < n; j++) { rL[cur.i + j] += r.L[j] * win[j]; rR[cur.i + j] += r.R[j] * win[j]; div[cur.i + j] += win[j]; } done++; if (onProgress) { const el = (performance.now() - t0) / 1000; onProgress('separate', done / nCh, el / done * (nCh - done)); } }));
       await tick();
     }
     await Promise.all(posts);
@@ -247,5 +248,6 @@
     if (Math.abs(ratio - 1) > 1e-6) { const [a, b] = back(oL, oR, inL, inR, ratio); return { L: a, R: b, ep: sess._ep }; }
     return { L: oL, R: oR, ep: sess._ep };
   }
-  root.ShedDemucs = Object.assign(api, { separateVocals, separateKaraoke, getSession, canRun: () => !!navigator.gpu });
+  const separateKaraoke = separateMDX;
+  root.ShedDemucs = Object.assign(api, { separateVocals, separateKaraoke, separateMDX, getSession, canRun: () => !!navigator.gpu });
 })(typeof self !== 'undefined' ? self : (typeof globalThis !== 'undefined' ? globalThis : this));
