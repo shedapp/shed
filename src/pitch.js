@@ -126,7 +126,12 @@ class PitchEngine {
       const n = need.length + needSong.length, B = new Float32Array(n * PE_WIN); let o = 0;
       for (const f of need) { B.set(X.subarray(f * PE_WIN, (f + 1) * PE_WIN), o); o += PE_WIN; }
       for (const f of needSong) { B.set(SX.subarray(f * PE_WIN, (f + 1) * PE_WIN), o); o += PE_WIN; }
+      const tm = (typeof performance !== 'undefined' ? performance : Date).now();
       try { const out = await this.model(B, n); P = out; PS = need.length * PE_BINS; this.stats.nn += n; } catch (e) { this.model = null; this.modelError = String(e); }
+      // adaptive rate: on a slow device, analyse fewer frames per second rather than fall behind
+      const per = ((typeof performance !== 'undefined' ? performance : Date).now() - tm) / n; this.msPerFrame = this.msPerFrame == null ? per : 0.9 * this.msPerFrame + 0.1 * per;
+      const hopMs = this.P.hop / PE_SR * 1000; if (this.msPerFrame > 0.75 * hopMs && this.P.hop < 1024) this.P.hop = Math.min(1024, Math.round(this.P.hop * 1.5)); else if (this.msPerFrame < 0.25 * hopMs && this.P.hop > 256) this.P.hop = Math.max(256, Math.round(this.P.hop / 1.5));
+      this.stats.hop = this.P.hop; this.stats.msPerFrame = +this.msPerFrame.toFixed(1);
     }
     for (let f = 0; f < nf; f++) {
       const q = info[f]; let r = { midi: null, conf: 0, rms: q.rms };
