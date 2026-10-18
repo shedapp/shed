@@ -1,0 +1,377 @@
+<title>Changes</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0d0f14">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Changes">
+<meta name="description" content="Play a progression. Hear where it could go — gospel, neo-soul, jazz, pop, classical, film — with every voicing drawn on keys and frets.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@500;600&display=swap">
+<style>
+/* Layout: a phone app — one screen at a time, a bottom tab bar, nothing scrolls but the screen itself.
+   The only color is harmony: chord chips and keys take the hue of their distance from home (amber) toward violet. */
+:root{
+  --bg:#0d0f14; --panel:#151821; --panel2:#1c2030; --panel3:#232838; --line:#2a2f40; --line2:#353b50;
+  --fg:#eef0f6; --muted:#8e94a8; --accent:#f2b544; --accent-ink:#1a1200; --good:#5fd38d; --warn:#f27a44;
+  --key-white:#ebe9e3; --key-black:#20232c; --key-line:#aeaba3; --key-c:#8a877f; --key-lh:#8ea0c9; --key-ink:#15120a;
+  --lshift:0%; --chip-bg:var(--panel2);
+  --display:"Bricolage Grotesque","Instrument Sans",system-ui,sans-serif;
+  --body:"Instrument Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  --tabh:62px;
+  color-scheme:dark;
+}
+:root[data-look="paper"]{
+  --bg:#f1efe9; --panel:#ffffff; --panel2:#ebe8e0; --panel3:#e1ded5; --line:#d8d4ca; --line2:#c9c5ba;
+  --fg:#1b1d24; --muted:#6a7082; --accent:#b57a0a; --accent-ink:#fff8e8; --good:#2e9a5f; --warn:#d0552a;
+  --key-white:#ffffff; --key-black:#2a2d36; --key-line:#b7b3aa; --key-c:#9a968e; --key-lh:#5b73a8; --key-ink:#15120a;
+  --lshift:-12%; --chip-bg:#f6f4ee;
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--body);font-size:15px;line-height:1.45;-webkit-font-smoothing:antialiased;overscroll-behavior:none}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--bg)}
+button,input,select,textarea{font:inherit;color:inherit}
+button{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:9px 14px;cursor:pointer;min-height:40px;color:var(--fg);transition:border-color .15s,background .15s,transform .08s}
+button:hover{border-color:var(--line2)}
+button:active{transform:scale(.985)}
+button:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button:disabled{opacity:.45;cursor:default}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600}
+button.on{border-color:var(--accent);color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,var(--panel2))}
+button.ghost{background:transparent}
+button.small{min-height:32px;padding:5px 10px;font-size:13px;border-radius:10px}
+button.icon{min-width:40px;padding:6px 10px}
+.app{height:100%;display:flex;flex-direction:column;max-width:640px;margin:0 auto;position:relative}
+@media (min-width:1100px){.app{max-width:1040px}}
+header.top{display:flex;align-items:center;gap:10px;padding:10px 0 6px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.brand{font-family:var(--display);font-weight:700;font-size:24px;letter-spacing:-.02em;line-height:1;display:flex;align-items:center;gap:1px}
+.brand .dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--accent);margin-left:3px;transform:translateY(5px);transition:background .6s}
+.brand .dot.live{animation:breathe 1.6s ease-in-out infinite}
+@keyframes breathe{50%{transform:translateY(5px) scale(1.35)}}
+.spacer{flex:1}
+.keybadge{display:flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:5px 12px;font-family:var(--mono);font-size:13px;min-height:34px}
+.keybadge b{font-weight:600;color:var(--fg)}
+.keybadge span{color:var(--muted);font-size:11px;letter-spacing:.04em}
+main.screen{flex:1;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;padding-bottom:calc(var(--tabh) + env(safe-area-inset-bottom,0px) + 16px);padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));scroll-behavior:smooth}
+.tab{display:none;flex-direction:column;gap:12px;animation:fade .18s ease}
+.tab.active{display:flex}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+nav.tabbar{position:fixed;left:0;right:0;bottom:0;z-index:20;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px);padding-left:max(0px,env(safe-area-inset-left,0px));padding-right:max(0px,env(safe-area-inset-right,0px))}
+nav.tabbar .inner{max-width:640px;margin:0 auto;display:grid;grid-template-columns:repeat(4,1fr);height:var(--tabh)}
+@media (min-width:1100px){nav.tabbar .inner{max-width:1040px}}
+nav.tabbar button{background:none;border:none;border-radius:0;color:var(--muted);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;font-size:11px;letter-spacing:.02em;min-height:0;padding:6px 0}
+nav.tabbar button svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+nav.tabbar button.active{color:var(--fg)}
+nav.tabbar button.active svg{stroke:var(--accent)}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:14px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.panel.tight{padding:12px}
+h2{margin:0;font-family:var(--display);font-size:17px;font-weight:600;letter-spacing:-.01em}
+h3{margin:0;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.hint{color:var(--muted);font-size:13px;line-height:1.45}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;min-width:0}
+.row.nowrap{flex-wrap:nowrap}
+.row.between{justify-content:space-between}
+.hscroll{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;scrollbar-width:none;-webkit-overflow-scrolling:touch;min-width:0}
+.hscroll::-webkit-scrollbar{display:none}
+.hscroll>*{flex:0 0 auto}
+.seg{display:inline-flex;background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:3px;gap:2px;max-width:100%;overflow-x:auto;scrollbar-width:none}
+.seg::-webkit-scrollbar{display:none}
+.seg button{border:none;background:transparent;border-radius:9px;min-height:32px;padding:5px 12px;font-size:13px;color:var(--muted);white-space:nowrap}
+.seg button.on{background:var(--panel);color:var(--fg);box-shadow:0 1px 4px rgba(0,0,0,.25)}
+/* chords */
+.chip{--h:38;--s:70%;--l:60%;position:relative;display:inline-flex;align-items:baseline;gap:1px;background:var(--chip-bg);border:1px solid var(--line);border-radius:12px;padding:7px 11px 9px;min-height:44px;cursor:pointer;color:var(--fg);transition:border-color .15s,box-shadow .2s;white-space:nowrap;font-family:var(--display);font-weight:600;font-size:19px;letter-spacing:-.01em;line-height:1}
+.chip .sfx{font-size:.64em;font-weight:600;display:inline-block;transform:translateY(-.12em);color:var(--fg);opacity:.92;margin-left:1px;letter-spacing:0}
+.chip .bass{font-size:.78em;font-weight:600;margin-left:1px}
+.chip .bass::before{content:"/";opacity:.6;margin:0 1px}
+.chip::after{content:"";position:absolute;left:10px;right:10px;bottom:4px;height:3px;border-radius:2px;background:hsl(var(--h) var(--s) calc(var(--l) + var(--lshift)));opacity:.95;width:var(--dur,auto)}
+.chip.changed{border-color:hsl(var(--h) var(--s) calc(var(--l) + var(--lshift)));box-shadow:0 0 0 1px hsl(var(--h) var(--s) calc(var(--l) + var(--lshift)) / .35),0 6px 20px -6px hsl(var(--h) var(--s) calc(var(--l) + var(--lshift)) / .55)}
+.chip.playing{background:hsl(var(--h) var(--s) calc(var(--l) + var(--lshift)) / .25);border-color:hsl(var(--h) var(--s) calc(var(--l) + var(--lshift)))}
+.chip.sm{font-size:15px;min-height:36px;padding:5px 9px 7px;border-radius:10px}
+.chip.sm::after{left:8px;right:8px;bottom:3px;height:2px}
+.chip.lg{font-size:28px;min-height:60px;padding:12px 16px 14px;border-radius:16px}
+.chip.ghost{border-style:dashed;color:var(--muted);font-family:var(--body);font-weight:500;font-size:14px}
+.chip.ghost::after{display:none}
+.chips{display:flex;gap:8px;flex-wrap:wrap;align-items:center;min-width:0}
+.chips.scroll{flex-wrap:nowrap;overflow-x:auto;padding-bottom:6px;scrollbar-width:none}
+.chips.scroll::-webkit-scrollbar{display:none}
+.rn{font-family:var(--mono);font-size:12px;color:var(--muted);letter-spacing:.01em}
+.moodbar{height:6px;border-radius:3px;background:linear-gradient(90deg,var(--g,#555));opacity:.95}
+.words{font-size:13px;color:var(--muted)}
+.words b{color:var(--fg);font-weight:600}
+/* listen */
+.listenwrap{display:flex;flex-direction:column;align-items:center;gap:10px;padding:6px 0 2px}
+.bigbtn{position:relative;width:min(236px,62vw);aspect-ratio:1;border-radius:50%;border:none;background:radial-gradient(circle at 50% 38%,var(--panel3),var(--panel2) 70%);box-shadow:inset 0 0 0 1px var(--line),0 20px 50px -24px rgba(0,0,0,.8);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:0;color:var(--fg)}
+.bigbtn .lbl{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.bigbtn .live{font-family:var(--display);font-size:40px;font-weight:700;letter-spacing:-.03em;line-height:1;min-height:40px;display:flex;align-items:baseline;gap:1px}
+.bigbtn .live .sfx{font-size:.55em;transform:translateY(-.25em);display:inline-block;margin-left:2px}
+.bigbtn .live .bass{font-size:.6em}
+.bigbtn .live .bass::before{content:"/";opacity:.6}
+.bigbtn.listening{box-shadow:inset 0 0 0 1px var(--accent),0 0 0 6px color-mix(in srgb,var(--accent) 14%,transparent),0 20px 50px -24px rgba(0,0,0,.8)}
+.bigbtn svg.ring{position:absolute;inset:-14px;width:calc(100% + 28px);height:calc(100% + 28px);pointer-events:none}
+.bigbtn svg.ring path{transition:opacity .12s}
+.bigbtn .sub{font-size:12px;color:var(--muted)}
+.pad{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+.pad button{padding:8px 2px;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-family:var(--display);font-weight:600;font-size:16px;letter-spacing:-.01em;border-radius:12px;position:relative;overflow:hidden}
+.pad button small{font-family:var(--mono);font-size:10px;color:var(--muted);font-weight:500}
+.pad button .sfx{font-size:.65em;transform:translateY(-.12em);display:inline-block}
+.pad button::after{content:"";position:absolute;left:0;right:0;bottom:0;height:3px;background:hsl(var(--h,38) var(--s,70%) calc(var(--l,60%) + var(--lshift)))}
+.roots{display:grid;grid-template-columns:repeat(12,1fr);gap:4px}
+.roots button{padding:6px 0;min-height:36px;font-family:var(--display);font-weight:600;font-size:14px;border-radius:9px}
+.quals{display:flex;gap:6px;flex-wrap:wrap}
+.quals button{min-height:34px;padding:4px 10px;font-size:13px;font-family:var(--display);font-weight:600;border-radius:9px}
+.typerow{display:flex;gap:8px}
+.typerow input{flex:1;min-width:0;background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:9px 12px;font-family:var(--mono);font-size:14px}
+.typerow input::placeholder{color:var(--muted)}
+.heard{min-height:60px;display:flex;flex-direction:column;gap:8px}
+/* ideas */
+.lens{display:flex;flex-direction:column;gap:10px}
+.depth{display:flex;align-items:center;gap:6px}
+.depth .dots{display:flex;gap:4px}
+.depth .dots i{width:10px;height:10px;border-radius:50%;background:var(--line2);display:block}
+.depth .dots i.on{background:var(--accent)}
+.depth .dots i.cap{opacity:.35}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:14px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.card.open{border-color:var(--line2)}
+.card .head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.card .device{font-family:var(--display);font-weight:600;font-size:16px;letter-spacing:-.01em}
+.card .reason{font-size:14px;line-height:1.5;color:var(--fg)}
+.card .reason .q{color:var(--muted)}
+.card .actions{display:flex;gap:8px;flex-wrap:wrap}
+.card .actions button{flex:1;min-width:84px}
+.ddots{display:inline-flex;gap:3px;align-items:center}
+.ddots i{width:6px;height:6px;border-radius:50%;background:var(--line2);display:block}
+.ddots i.on{background:var(--accent)}
+.chart{display:flex;flex-direction:column;gap:0;background:var(--panel2);border-radius:12px;padding:10px;min-width:0}
+.chart .strow{display:flex;align-items:center;gap:8px;min-width:0}
+.chart .strow .lab{flex:0 0 74px;display:flex;flex-direction:column;gap:1px;min-width:0}
+.chart .strow .lab .sym{font-family:var(--display);font-weight:600;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.1}
+.chart .strow .lab .sym .sfx{font-size:.62em;transform:translateY(-.12em);display:inline-block}
+.chart .strow .lab .sym .bass{font-size:.75em}
+.chart .strow .lab .sym .bass::before{content:"/";opacity:.6}
+.chart .strow .lab small{font-family:var(--mono);font-size:10px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chart .strow .kb{flex:1;min-width:0;cursor:pointer;border-radius:6px}
+.chart .strow .kb svg{display:block;height:58px;width:100%}
+.chart .connrow{display:flex;gap:8px}
+.chart .connrow .lab{flex:0 0 74px}
+.chart .connrow svg{flex:1;min-width:0;display:block;height:24px}
+.chart .conn line{stroke-dasharray:none}
+.chart.animate .conn line:not([stroke-dasharray]){animation:draw .3s ease forwards}
+@keyframes draw{from{opacity:0}to{opacity:1}}
+.grips{display:flex;gap:10px;overflow-x:auto;padding:6px 2px 4px;scrollbar-width:none}
+.grips::-webkit-scrollbar{display:none}
+.grip{flex:0 0 112px;display:flex;flex-direction:column;align-items:center;gap:2px;background:var(--panel2);border-radius:12px;padding:8px 4px 6px;cursor:pointer}
+.grip .sym{font-family:var(--display);font-weight:600;font-size:15px;white-space:nowrap}
+.grip .sym .sfx{font-size:.62em;transform:translateY(-.12em);display:inline-block}
+.grip .sym .bass{font-size:.75em}.grip .sym .bass::before{content:"/";opacity:.6}
+.grip svg{width:104px;height:130px;display:block}
+.grip small{font-family:var(--mono);font-size:10px;color:var(--muted)}
+.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+/* song */
+.songhead{display:flex;flex-direction:column;gap:8px}
+.songhead input.title{background:transparent;border:none;border-bottom:1px solid var(--line);font-family:var(--display);font-weight:700;font-size:24px;letter-spacing:-.02em;padding:4px 0;width:100%;min-width:0}
+.section{display:flex;flex-direction:column;gap:10px}
+.section .shead{display:flex;align-items:center;gap:8px}
+.section .shead input{background:transparent;border:none;border-bottom:1px dashed var(--line);font-family:var(--display);font-weight:600;font-size:17px;padding:2px 0;min-width:0;flex:1}
+.ideatabs{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.ideatabs button{min-height:30px;padding:3px 10px;font-size:12px;border-radius:999px;font-family:var(--mono)}
+.lyrics{font-size:15px;line-height:1.35;white-space:pre-wrap;word-break:break-word}
+.lyrics .ln{display:block;min-height:1.3em;margin:2px 0}
+.lyrics .seg{display:inline-flex;flex-direction:column;vertical-align:bottom;margin-right:.18em}
+.lyrics .seg .ch{font-family:var(--display);font-weight:600;font-size:13px;color:hsl(var(--h,38) var(--s,70%) calc(var(--l,62%) + var(--lshift)));min-height:1.1em;line-height:1.1;white-space:nowrap}
+.lyrics .seg .ch .sfx{font-size:.68em;transform:translateY(-.1em);display:inline-block}
+.lyrics .seg .ch .bass{font-size:.8em}.lyrics .seg .ch .bass::before{content:"/";opacity:.6}
+.lyrics .seg .tx{white-space:pre-wrap}
+.lyrics .seg.empty .tx{display:none}
+.lyrics.plain .ln{color:var(--muted)}
+textarea.lyr{width:100%;min-height:150px;background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-family:var(--mono);font-size:13.5px;line-height:1.5;resize:vertical}
+.insert{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.insert button{min-height:32px;padding:4px 9px;font-size:13px;font-family:var(--display);font-weight:600}
+.insert button .sfx{font-size:.65em;transform:translateY(-.12em);display:inline-block}
+.list{display:flex;flex-direction:column;gap:8px}
+.songrow{display:flex;align-items:center;gap:10px;background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:10px 12px;cursor:pointer}
+.songrow b{font-family:var(--display);font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.songrow small{color:var(--muted);font-family:var(--mono);font-size:11px}
+/* circle */
+.circlewrap{display:flex;justify-content:center}
+.circlewrap svg{width:min(100%,380px);height:auto;display:block}
+.circlewrap text{font-family:var(--display);font-weight:600;pointer-events:none}
+.family{display:flex;flex-direction:column;gap:6px}
+/* sheets */
+.sheetbg{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:40;display:flex;align-items:flex-end;justify-content:center;animation:fade .15s ease}
+.sheet{background:var(--panel);border:1px solid var(--line);border-radius:18px 18px 0 0;width:100%;max-width:640px;max-height:88%;overflow-y:auto;padding:14px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:12px;animation:up .2s ease}
+@keyframes up{from{transform:translateY(24px);opacity:.6}to{transform:none;opacity:1}}
+.sheet h2{font-size:18px}
+.sheet .grab{width:38px;height:4px;border-radius:2px;background:var(--line2);margin:0 auto 2px}
+.field{display:flex;flex-direction:column;gap:6px}
+.field label{font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);font-weight:600}
+select,input[type=number]{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;min-height:38px}
+input[type=range]{width:100%;accent-color:var(--accent)}
+.toast{position:fixed;left:50%;bottom:calc(var(--tabh) + 14px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--panel3);border:1px solid var(--line2);padding:10px 14px;border-radius:12px;font-size:14px;max-width:90vw;opacity:0;pointer-events:none;transition:opacity .2s;z-index:50;box-shadow:0 10px 30px -10px rgba(0,0,0,.6)}
+.toast.show{opacity:1}
+.onboard{display:flex;flex-direction:column;gap:14px}
+.onboard .pick{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.onboard .pick button{min-height:56px;font-family:var(--display);font-weight:600}
+.stylepick{display:flex;gap:6px;flex-wrap:wrap}
+.notice{background:var(--panel2);border-radius:12px;padding:10px 12px;font-size:13px;color:var(--muted);line-height:1.45}
+.notice b{color:var(--fg)}
+.credit{font-size:11px;color:var(--muted);text-align:center;padding:8px 0 0}
+.credit a{color:var(--muted)}
+kbd{font-family:var(--mono);background:var(--panel2);border:1px solid var(--line);border-radius:5px;padding:1px 6px;font-size:12px}
+.twocol{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;min-width:0}
+@media (min-width:1100px){.twocol.ideas{grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:start}}
+.list{min-width:0}
+@media (max-width:420px){.pad button{font-size:14px;min-height:48px}.chip{font-size:17px}.bigbtn .live{font-size:34px}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="app" id="app">
+  <header class="top">
+    <div class="brand" id="brand">Changes<span class="dot" id="brandDot"></span></div>
+    <span class="spacer"></span>
+    <button class="keybadge" id="keyBtn" title="Key — tap to change" aria-label="Key, tap to change"><span>KEY</span><b id="keyLbl">C</b></button>
+    <button class="icon ghost" id="settingsBtn" aria-label="Settings" title="Settings"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+  </header>
+
+  <main class="screen" id="screen">
+    <!-- LISTEN -->
+    <section class="tab active" id="tab-listen">
+      <div class="panel" id="onboardPanel" hidden></div>
+      <div class="panel">
+        <div class="row between">
+          <div class="seg" id="inputMode" role="tablist" aria-label="Input">
+            <button data-m="mic" class="on">Microphone</button><button data-m="midi">MIDI</button><button data-m="tap">Tap</button>
+          </div>
+          <span class="hint" id="inputStatus"></span>
+        </div>
+        <div class="listenwrap" id="micWrap">
+          <button class="bigbtn" id="listenBtn" aria-label="Start listening">
+            <svg class="ring" viewBox="0 0 100 100" id="ring" aria-hidden="true"></svg>
+            <span class="lbl" id="listenLbl">Listen</span>
+            <span class="live" id="liveChord">—</span>
+            <span class="sub" id="liveSub">phone near the piano</span>
+          </button>
+          <div class="hint" id="micHint">Play 4 to 8 bars, clearly, one chord at a time. Then stop and fix anything it misheard.</div>
+        </div>
+        <div class="listenwrap" id="midiWrap" hidden>
+          <button class="bigbtn" id="midiBtn" aria-label="Connect MIDI">
+            <span class="lbl" id="midiLbl">MIDI</span>
+            <span class="live" id="midiLive">—</span>
+            <span class="sub" id="midiSub">USB or Bluetooth keyboard</span>
+          </button>
+          <div class="hint" id="midiHint">Exact notes, instant. Hold a chord and it is read with its inversion; lift, play the next.</div>
+        </div>
+        <div id="tapWrap" hidden style="display:flex;flex-direction:column;gap:10px">
+          <div class="row between">
+            <h3>Chords in <span id="padKey">C major</span></h3>
+            <div class="seg" id="padQual"><button data-q="tri" class="on">Triads</button><button data-q="sev">7ths</button><button data-q="rich">Rich</button></div>
+          </div>
+          <div class="pad" id="pad"></div>
+          <h3>Any chord</h3>
+          <div class="roots" id="roots"></div>
+          <div class="quals" id="quals"></div>
+          <div class="typerow"><input id="typeIn" placeholder="or type: C  Am7  F  G/B  (| for bars)" autocomplete="off" autocapitalize="off" spellcheck="false"><button id="typeAdd" class="small">Add</button></div>
+        </div>
+      </div>
+      <div class="panel" id="heardPanel">
+        <div class="row between">
+          <h2 id="heardTitle">We heard</h2>
+          <div class="row">
+            <button class="small ghost" id="undoBtn" title="Remove the last chord">Undo</button>
+            <button class="small ghost" id="clearBtn">Clear</button>
+          </div>
+        </div>
+        <div class="heard" id="heard"><div class="hint">Nothing yet. Play, plug in, or tap chords, then they appear here as chips — tap a chip to fix it.</div></div>
+        <div class="row between">
+          <span class="hint" id="heardKey"></span>
+          <div class="row">
+            <button class="small" id="hearProg">▶ Hear</button>
+            <button class="primary" id="toIdeas">Get ideas →</button>
+          </div>
+        </div>
+      </div>
+      <div class="credit">Audio never leaves your device · <a href="https://github.com/sfzinstruments/SalamanderGrandPiano" target="_blank" rel="noopener">Salamander Grand Piano</a>, CC BY 3.0</div>
+    </section>
+
+    <!-- IDEAS -->
+    <section class="tab" id="tab-ideas">
+      <div class="panel tight">
+        <div class="row between">
+          <h3>Your progression</h3>
+          <div class="row"><button class="small ghost" id="ideasHear">▶ Hear</button><button class="small ghost" id="ideasEdit">Edit</button></div>
+        </div>
+        <div class="chips scroll" id="ideasProg"></div>
+        <div class="row between"><span class="rn" id="ideasRoman"></span><span class="words" id="ideasMood"></span></div>
+      </div>
+      <div class="panel tight lens">
+        <div class="row between">
+          <h3>Lens</h3>
+          <div class="row"><button class="small" id="shadowBtn" title="Negative harmony: the whole progression in a mirror">Shadow</button><button class="small" id="dareBtn" title="One notch deeper than the dial">Dare me</button></div>
+        </div>
+        <div class="seg" id="styleSeg" role="tablist" aria-label="Style"></div>
+        <div class="row between">
+          <div class="depth"><span class="hint">Depth</span><button class="small icon" id="depthDown" aria-label="Less depth">−</button><div class="dots" id="depthDots"></div><button class="small icon" id="depthUp" aria-label="More depth">+</button></div>
+          <span class="hint" id="styleBlurb"></span>
+        </div>
+        <div class="hscroll" id="moodChips"></div>
+      </div>
+      <div class="twocol ideas">
+        <div class="list" id="options"><div class="hint">Confirm a progression on Listen, then come here.</div></div>
+        <div id="chartHost"></div>
+      </div>
+    </section>
+
+    <!-- SONG -->
+    <section class="tab" id="tab-song">
+      <div class="panel songhead">
+        <div class="row nowrap">
+          <input class="title" id="songTitle" placeholder="Untitled song" aria-label="Song title">
+          <button class="small ghost" id="songsBtn" title="Your songs">Songs</button>
+        </div>
+        <div class="row between">
+          <span class="hint" id="songMeta"></span>
+          <div class="row"><button class="small ghost" id="exportBtn">Export</button><button class="small ghost" id="addSection">+ Section</button></div>
+        </div>
+      </div>
+      <div class="list" id="sections"></div>
+    </section>
+
+    <!-- CIRCLE -->
+    <section class="tab" id="tab-circle">
+      <div class="panel">
+        <div class="row between"><h2>Circle of fifths</h2><div class="seg" id="modeSeg"><button data-mode="major" class="on">major</button><button data-mode="minor">minor</button></div></div>
+        <div class="circlewrap" id="circle"></div>
+        <div class="hint">Tap a key to set it. Color is distance from home: amber at home, hot on the sharp side, cool on the flat side, violet at the tritone.</div>
+      </div>
+      <div class="panel" id="families"></div>
+    </section>
+  </main>
+
+  <nav class="tabbar" aria-label="Screens">
+    <div class="inner">
+      <button data-tab="listen" class="active"><svg viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M8 7v10"/><path d="M16 7v10"/><path d="M4 10v4"/><path d="M20 10v4"/></svg>Listen</button>
+      <button data-tab="ideas"><svg viewBox="0 0 24 24"><path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1.1 2.1h4.8c.1-.9.5-1.6 1.1-2.1A6 6 0 0 0 12 3z"/></svg>Ideas</button>
+      <button data-tab="song"><svg viewBox="0 0 24 24"><path d="M5 4h14"/><path d="M5 9h14"/><path d="M5 14h9"/><path d="M5 19h6"/></svg>Song</button>
+      <button data-tab="circle"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/><path d="M12 3v5.5"/><path d="M12 15.5V21"/><path d="M3 12h5.5"/><path d="M15.5 12H21"/></svg>Circle</button>
+    </div>
+  </nav>
+  <div id="sheetHost"></div>
+  <div class="toast" id="toast"></div>
+</div>
+
+<script id="pianoData" type="application/json">__PIANO_DATA__</script>
+<script>
+__THEORY__
+__MOOD__
+__REHARM__
+__VOICING__
+__AUDIO__
+__UI__
+</script>
