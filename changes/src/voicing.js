@@ -137,8 +137,11 @@ const Voicing = (() => {
       const cands = candidatesRH(chord, style);
       const want = Math.min(4, Math.max(...cands.map(c => c.length)));
       let best = null, bestCost = Infinity;
+      const mel = chord.melody && chord.melody.length ? chord.melody.map(m => typeof m === 'number' ? m : m.note) : null;
+      const ceiling = mel ? Math.min(...mel) : null;
       for (const rh of cands) {
-        const c = motionCost(prevRH, rh) + rangeCost(rh, opts.span, want);
+        let c = motionCost(prevRH, rh) + rangeCost(rh, opts.span, want);
+        if (ceiling != null) { const top = rh[rh.length - 1]; if (top > ceiling) c += (top - ceiling) * 1.5 + 3; const gap = ceiling - top; if (gap > 10) c += (gap - 10) * 0.4; }
         if (c < bestCost) { bestCost = c; best = rh; }
       }
       if (!best) best = stackUp(T.chordPcs(chord).map(p => mod(p - chord.root, 12)), chord.root, 60);

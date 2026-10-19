@@ -151,7 +151,7 @@ const Audio = (() => {
   // Play a recorded take exactly: notes with absolute ms times and durations and velocities 0..127
   function playTake(notes, opts = {}) {
     stop(true); ensureCtx(); unmuteIOS();
-    const token = ++PLAYER.token; PLAYER.playing = true;
+    const token = ++PLAYER.token; PLAYER.playing = true; PLAYER.lastItems = items;
     const start = ctx.currentTime + 0.1; const first = notes.length ? Math.min(...notes.map(n => n.at)) : 0; let end = start;
     for (const n of notes) { const at = start + (n.at - first) / 1000; const dur = Math.max(0.08, n.dur / 1000); playTone(n.n, dur, at, Math.min(1, 0.2 + n.v / 127 * 0.8)); end = Math.max(end, at + dur); }
     if (opts.onNote) notes.forEach(n => { const ms = Math.max(0, (start + (n.at - first) / 1000 - ctx.currentTime) * 1000); setTimeout(() => { if (PLAYER.token === token) opts.onNote(n); }, ms); });
@@ -163,7 +163,7 @@ const Audio = (() => {
   function play(items, opts = {}) {
     stop(true); ensureCtx(); unmuteIOS();
     const bpm = opts.bpm || 76, spb = 60 / bpm, feel = opts.feel || 'hold';
-    const token = ++PLAYER.token; PLAYER.playing = true;
+    const token = ++PLAYER.token; PLAYER.playing = true; PLAYER.lastItems = items;
     const start = ctx.currentTime + 0.08;
     const schedule = (passStart, pass) => {
       let t = passStart;

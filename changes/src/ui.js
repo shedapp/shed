@@ -3,7 +3,7 @@
   const T = Theory, M = Mood, R = Reharm, V = Voicing, A = Audio;
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  const BUILD = '__BUILD__';
+  const BUILD = 'v0.7.2';
 
   // ---------- state ----------
   const DEFAULTS = { symbols: 'plain', twoHands: false, span: 'default', sound: true, tone: 'grand', feel: 'hold', bpm: 76, look: 'night', fingers: false, instrument: 'piano', styles: ['neosoul', 'gospel'] };
@@ -68,23 +68,42 @@
     const v = V.voiceProgression([c], S.key, S.style, { span: S.settings.span })[0];
     A.playNotes(v.all, dur);
   }
+  // Mark which take notes are melody: notes the reader flagged as melody, plus lone onsets above the harmony.
+  function takeWithRoles() {
+    if (!S.take || !S.take.notes) return null;
+    if (S.take.roles) return S.take.roles;
+    const notes = S.take.notes.map(n => Object.assign({}, n));
+    const mel = new Set();
+    for (const c of S.prog) if (c.melody && c.span) for (const m of c.melody) { const at = typeof m === 'number' ? null : m.at; for (const n of notes) if (n.n === (typeof m === 'number' ? m : m.note) && (at == null ? (n.at >= c.span.start - 30 && n.at < c.span.end + 30) : Math.abs(n.at - (c.span.start + at)) < 80)) mel.add(n); }
+    // lone onsets (no other note struck within 40 ms) above the highest simultaneous harmony are melody too
+    notes.forEach((n, i) => { const together = notes.filter(o => o !== n && Math.abs(o.at - n.at) < 40); if (!together.length) { const under = notes.filter(o => o !== n && o.at <= n.at && o.at + o.dur > n.at && !mel.has(o)); if (under.length && n.n > Math.max(...under.map(o => o.n))) mel.add(n); } });
+    notes.forEach(n => n.mel = mel.has(n));
+    S.take.roles = notes; return notes;
+  }
+  const nearestTone = (n, pcs, prefer) => { let best = null, bd = 99; for (let d = -6; d <= 6; d++) { const m = n + d; if (!pcs.includes(((m % 12) + 12) % 12)) continue; const dist = Math.abs(d) + (d > 0 ? 0.1 : 0); if (dist < bd) { bd = dist; best = m; } } return best == null ? n : best; };
   function progItems(prog, key, style) {
     const vs = V.voiceProgression(prog, key, style, { span: S.settings.span });
-    const asPlayed = S.settings.feel === 'asPlayed' && S.take && S.take.notes && S.take.notes.length;
+    const take = S.settings.feel === 'asPlayed' ? takeWithRoles() : null;
+    const spanned = S.prog.filter(c => c.span);
+    if (!take || !take.length || !spanned.length) return vs.map((v, i) => ({ notes: v.all, beats: prog[i].beats || 4 }));
+    // the take's timeline, cut into the option's chords in proportion to their beats
+    const t0 = Math.min(...spanned.map(c => c.span.start), ...take.map(n => n.at)), t1 = Math.max(...spanned.map(c => c.span.end), ...take.map(n => n.at + n.dur));
+    const totalBeats = prog.reduce((a, c) => a + (c.beats || 4), 0); const msPerBeat = (t1 - t0) / totalBeats;
+    let b = 0;
     return vs.map((v, i) => {
-      const c = prog[i]; const item = { notes: v.all, beats: c.beats || 4 };
-      if (asPlayed && c.span) {
-        const inSpan = S.take.notes.filter(n => n.at >= c.span.start - 30 && n.at < c.span.end - 30);
-        if (inSpan.length) {
-          const mpb = (c.span.end - c.span.start) / item.beats; // ms per beat inside this chord's own span
-          if (!c.changed) item.events = inSpan.map(n => ({ at: (n.at - c.span.start) / mpb, dur: Math.max(0.05, n.dur / mpb), notes: [n.n], vel: Math.min(1, 0.25 + n.v / 127 * 0.75) }));
-          else { // the same rhythm and hand shape, re-pitched to the new chord's voicing
-            const pitches = [...new Set(inSpan.map(n => n.n))].sort((a, b) => a - b); const target = v.all.slice().sort((a, b) => a - b);
-            const mapNote = (n) => { const r = pitches.indexOf(n); const idx = pitches.length > 1 ? Math.round(r * (target.length - 1) / (pitches.length - 1)) : 0; return target[idx]; };
-            item.events = inSpan.map(n => ({ at: (n.at - c.span.start) / mpb, dur: Math.max(0.05, n.dur / mpb), notes: [mapNote(n.n)], vel: Math.min(1, 0.25 + n.v / 127 * 0.75) }));
-          }
-        }
-      }
+      const c = prog[i]; const beats = c.beats || 4; const w0 = t0 + b * msPerBeat, w1 = t0 + (b + beats) * msPerBeat; b += beats;
+      const inWin = take.filter(n => (i === 0 || n.at >= w0 - 25) && (i === vs.length - 1 || n.at < w1 - 25));
+      const item = { notes: v.all, beats };
+      if (!inWin.length) return item;
+      const orig = S.prog.find(o => o.span && o.span.start <= w0 + 25 && o.span.end > w0 + 25);
+      const same = orig && T.sameChord(orig, c);
+      const pcs = T.chordPcs(c); const bassPc = c.bass != null ? c.bass : c.root;
+      // strikes: harmony notes struck together; the lowest of a strike is the bass and goes to the chord's bass tone
+      const strikes = []; inWin.filter(n => !n.mel).sort((x, y) => x.at - y.at).forEach(n => { const st = strikes.find(s => Math.abs(s.at - n.at) < 40); if (st) st.notes.push(n); else strikes.push({ at: n.at, notes: [n] }); });
+      const ev = [];
+      for (const st of strikes) { const sorted = st.notes.slice().sort((x, y) => x.n - y.n); sorted.forEach((n, k) => { const pitch = same ? n.n : (k === 0 && sorted.length > 1 ? nearestTone(n.n, [bassPc]) : nearestTone(n.n, pcs)); ev.push({ at: (n.at - w0) / msPerBeat, dur: Math.max(0.05, n.dur / msPerBeat), notes: [pitch], vel: Math.min(1, 0.2 + n.v / 127 * 0.8) }); }); }
+      for (const n of inWin.filter(x => x.mel)) ev.push({ at: (n.at - w0) / msPerBeat, dur: Math.max(0.05, n.dur / msPerBeat), notes: [n.n], vel: Math.min(1, 0.2 + n.v / 127 * 0.8) });
+      item.events = ev;
       return item;
     });
   }

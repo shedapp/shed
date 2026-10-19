@@ -1149,7 +1149,14 @@ const Reharm = (() => {
       const ok = k === 'min' ? [2, 5, 9] : k === 'maj' ? [2, 6, 9] : k === 'dom' ? [1, 2, 3, 6, 8, 9] : k === 'sus' ? [2, 9] : [2];
       return c.melody.every(n => pcs.includes(mod(n, 12)) || ok.includes(mod(n - c.root, 12)));
     };
+    // carry the writer's melody onto each option chord by position in the phrase, so replacements are judged
+    // against the notes that were actually sung over that stretch of time
+    const total = prog.reduce((a, c) => a + beats(c), 0);
+    const srcSpans = []; { let b = 0; for (const c of prog) { srcSpans.push({ s: b, e: b + beats(c), m: c.melody && c.melody.length ? c.melody.map(m => typeof m === 'number' ? m : m.note) : [] }); b += beats(c); } }
+    const hasMel = srcSpans.some(x => x.m.length);
+    const attachMelody = (p) => { if (!hasMel) return; const tot = p.reduce((a, c) => a + beats(c), 0); const k = total / (tot || 1); let b = 0; for (const c of p) { const s0 = b * k, e0 = (b + beats(c)) * k; b += beats(c); const m = []; for (const x of srcSpans) { const ov = Math.min(e0, x.e) - Math.max(s0, x.s); if (ov > 0.01 * total) m.push(...x.m); } if (m.length) c.melody = [...new Set(m)]; } };
     all.forEach(o => {
+      attachMelody(o.prog);
       o.mood = M.progressionMood(o.prog, key, style);
       o.roman = o.prog.map(c => c.roman || T.romanNumeral(c, key));
       o.clashes = o.prog.filter(c => c.changed && !fitsMelody(c)).map(c => sym(c, key));
