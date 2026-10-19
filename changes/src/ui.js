@@ -15,13 +15,16 @@
     songs: [], songId: null,
     settings: Object.assign({}, DEFAULTS), onboarded: false,
     inputMode: 'mic', padQ: 'tri', anyRoot: 0, anyQ: 'maj', circleMode: 'major', tab: 'listen',
+    take: null, melodyLock: true,
   };
   const STORE = 'changes.v1';
   function save() {
-    try { localStorage.setItem(STORE, JSON.stringify({ key: S.key, prog: S.prog, style: S.style, depth: S.depth, songs: S.songs, songId: S.songId, settings: S.settings, onboarded: S.onboarded, inputMode: S.inputMode, padQ: S.padQ })); } catch (e) { /* storage may be unavailable */ }
+    const sg = currentSong(); if (sg) sg.updated = Date.now();
+    try { localStorage.setItem(STORE, JSON.stringify({ key: S.key, prog: S.prog, style: S.style, depth: S.depth, songs: S.songs, songId: S.songId, settings: S.settings, onboarded: S.onboarded, inputMode: S.inputMode, padQ: S.padQ, take: S.take })); } catch (e) { /* storage may be unavailable */ }
+    if (typeof Sync !== 'undefined') Sync.schedulePush(() => S.songs);
   }
   function load() {
-    try { const raw = localStorage.getItem(STORE); if (!raw) return; const d = JSON.parse(raw); ['key', 'prog', 'style', 'depth', 'songs', 'songId', 'onboarded', 'inputMode', 'padQ'].forEach(k => { if (d[k] !== undefined) S[k] = d[k]; }); if (d.settings) S.settings = Object.assign({}, DEFAULTS, d.settings); } catch (e) { /* ignore */ }
+    try { const raw = localStorage.getItem(STORE); if (!raw) return; const d = JSON.parse(raw); ['key', 'prog', 'style', 'depth', 'songs', 'songId', 'onboarded', 'inputMode', 'padQ', 'take'].forEach(k => { if (d[k] !== undefined) S[k] = d[k]; }); if (d.settings) S.settings = Object.assign({}, DEFAULTS, d.settings); } catch (e) { /* ignore */ }
     if (!R.STYLES[S.style]) S.style = 'neosoul';
   }
 
@@ -51,7 +54,8 @@
     const beats = c.beats || 4; const dur = Math.min(1, beats / 4);
     const cls = ['chip', opts.cls || '', c.changed ? 'changed' : ''].join(' ').trim();
     const mel = c.melody && c.melody.length ? ` · melody ${c.melody.map(n => T.pcName(n % 12, key || S.key)).join(' ')}` : '';
-    return `<button class="${cls}" style="${M.vars(m)};--dur:calc((100% - 20px) * ${dur.toFixed(2)})" data-i="${opts.i ?? ''}" aria-label="${esc(speak(c, key))}${beats !== 4 ? ', ' + beats + ' beats' : ''}${esc(mel)}" title="${esc(speak(c, key) + mel)}">${chordInner(c, key)}${mel ? '<span class="mel" aria-hidden="true">♪</span>' : ''}</button>`;
+    const unsure = c.conf != null && c.conf < 0.1 && c.alts && c.alts.length;
+    return `<button class="${cls}${unsure ? ' unsure' : ''}" style="${M.vars(m)};--dur:calc((100% - 20px) * ${dur.toFixed(2)})" data-i="${opts.i ?? ''}" aria-label="${esc(speak(c, key))}${beats !== 4 ? ', ' + beats + ' beats' : ''}${esc(mel)}${unsure ? ', uncertain' : ''}" title="${esc(speak(c, key) + mel)}${unsure ? ' (uncertain — tap for other guesses)' : ''}">${chordInner(c, key)}${mel ? '<span class="mel" aria-hidden="true">♪</span>' : ''}${unsure ? '<span class="unsure-dot" aria-hidden="true"></span>' : ''}</button>`;
   }
   function gradientOf(prog, key) {
     const total = prog.reduce((a, c) => a + (c.beats || 4), 0); let acc = 0; const stops = [];
@@ -64,7 +68,26 @@
     const v = V.voiceProgression([c], S.key, S.style, { span: S.settings.span })[0];
     A.playNotes(v.all, dur);
   }
-  function progItems(prog, key, style) { const vs = V.voiceProgression(prog, key, style, { span: S.settings.span }); return vs.map((v, i) => ({ notes: v.all, beats: prog[i].beats || 4 })); }
+  function progItems(prog, key, style) {
+    const vs = V.voiceProgression(prog, key, style, { span: S.settings.span });
+    const asPlayed = S.settings.feel === 'asPlayed' && S.take && S.take.notes && S.take.notes.length;
+    return vs.map((v, i) => {
+      const c = prog[i]; const item = { notes: v.all, beats: c.beats || 4 };
+      if (asPlayed && c.span) {
+        const inSpan = S.take.notes.filter(n => n.at >= c.span.start - 30 && n.at < c.span.end - 30);
+        if (inSpan.length) {
+          const mpb = (c.span.end - c.span.start) / item.beats; // ms per beat inside this chord's own span
+          if (!c.changed) item.events = inSpan.map(n => ({ at: (n.at - c.span.start) / mpb, dur: Math.max(0.05, n.dur / mpb), notes: [n.n], vel: Math.min(1, 0.25 + n.v / 127 * 0.75) }));
+          else { // the same rhythm and hand shape, re-pitched to the new chord's voicing
+            const pitches = [...new Set(inSpan.map(n => n.n))].sort((a, b) => a - b); const target = v.all.slice().sort((a, b) => a - b);
+            const mapNote = (n) => { const r = pitches.indexOf(n); const idx = pitches.length > 1 ? Math.round(r * (target.length - 1) / (pitches.length - 1)) : 0; return target[idx]; };
+            item.events = inSpan.map(n => ({ at: (n.at - c.span.start) / mpb, dur: Math.max(0.05, n.dur / mpb), notes: [mapNote(n.n)], vel: Math.min(1, 0.25 + n.v / 127 * 0.75) }));
+          }
+        }
+      }
+      return item;
+    });
+  }
   let playingCleanup = null;
   function playProg(prog, key, style, container, loop) {
     if (!S.settings.sound) { toast('Sound is off in settings'); return; }
@@ -219,7 +242,7 @@
     const L = S.prog[S.prog.length - 1];
     if (L && c.src !== 'tap' && c.src !== 'type' && T.sameChord(L, c) && L.src === c.src) { L.ms = (L.ms || 0) + (c.ms || 0); if (!quiet) renderHeard(); return; }
     const melody = c.melody && c.melody.length ? c.melody.map(m => typeof m === 'number' ? m : m.note) : undefined;
-    S.prog.push({ root: c.root, q: c.q, bass: c.bass ?? null, beats: c.beats || 4, ms: c.ms, conf: c.conf, src: c.src, melody, notes: c.notes });
+    S.prog.push({ root: c.root, q: c.q, bass: c.bass ?? null, beats: c.beats || 4, ms: c.ms, conf: c.conf, src: c.src, melody, notes: c.notes, span: c.span, alts: c.alts });
     if (!S.keyLocked) detectKey();
     if (!quiet) renderHeard();
     save();
@@ -230,8 +253,20 @@
     if (timed.length < 2) return;
     const ms = timed.map(c => c.ms).sort((a, b) => a - b); const med = ms[Math.floor(ms.length / 2)];
     timed.forEach(c => { const r = c.ms / med; c.beats = r < 0.38 ? 1 : r < 0.75 ? 2 : r < 1.5 ? 4 : 8; c.ms = null; });
-    renderHeard();
+    // tempo: the median chord is taken as one bar of four
+    const bpm = Math.round(60000 / (med / 4));
+    if (bpm >= 48 && bpm <= 180) { S.settings.bpm = bpm; const sg = currentSong(); if (sg) sg.bpm = bpm; toast(`Tempo set to ${bpm} from your take`); }
+    renderHeard(); save();
   }
+  function finishMidiTake() {
+    if (A.MIDI.current) { const cur = A.MIDI.current; cur.chord.span = { start: A.MIDI.currentSince - A.MIDI.take.t0, end: performance.now() - A.MIDI.take.t0 }; addChord(Object.assign({}, cur.chord, { beats: 4, ms: performance.now() - A.MIDI.currentSince, src: 'midi' })); A.MIDI.current = null; }
+    const notes = A.takeNotes();
+    if (notes.length) S.take = { notes, at: Date.now() };
+    finalizeDurations(); updateHeardTitle(); renderHeard();
+    $('midiLive').textContent = '—'; $('midiSub').textContent = `take kept: ${notes.length} notes`;
+    A.takeStart();
+  }
+  $('midiDone').addEventListener('click', finishMidiTake);
   function updateHeardTitle() { $('heardTitle').textContent = A.MIC.active ? 'Hearing…' : S.prog.some(c => c.src === 'mic' || c.src === 'midi') ? 'We heard' : 'Your chords'; }
   function renderHeard() {
     renderKey(); updateHeardTitle();
@@ -247,7 +282,9 @@
   function editChord(i) {
     const c = S.prog[i];
     const QL = ['maj', 'min', '7', 'maj7', 'm7', 'dim', 'dim7', 'm7b5', 'aug', 'sus4', 'sus2', 'add9', '6', 'm6', '69', '9', 'maj9', 'm9', 'm11', '13', '7sus4', '9sus4', '13sus4', 'maj7s11', '7b9', '7s9', '7alt', 'mMaj7'];
+    const alts = (c.alts || []).filter(a => !(a.root === c.root && a.q === c.q && (a.bass ?? null) === (c.bass ?? null)));
     const html = `<h2>${esc(sym(c))} <span class="hint">${esc(T.romanNumeral(c, S.key))}</span></h2>
+      ${alts.length ? `<div class="field"><label>Did you mean</label><div class="chips">${alts.map((a, k) => chipHTML(Object.assign({}, a, { beats: c.beats }), S.key, { cls: 'sm alt', i: k })).join('')}</div></div>` : ''}
       <div class="field"><label>Root</label><div class="roots" id="eRoots">${Array.from({ length: 12 }, (_, pc) => `<button data-pc="${pc}" class="${c.root === pc ? 'on' : ''}">${esc(T.pcName(pc, S.key, c.q))}</button>`).join('')}</div></div>
       <div class="field"><label>Quality</label><div class="quals" id="eQuals">${QL.map(q => `<button data-q="${q}" class="${c.q === q ? 'on' : ''}">${esc(T.pcName(c.root, S.key, q))}${esc(S.settings.symbols === 'jazz' ? T.Q[q].jazz : T.Q[q].suffix)}</button>`).join('')}</div></div>
       <div class="field"><label>Bass</label><div class="roots" id="eBass"><button data-b="" class="${c.bass == null ? 'on' : ''}">root</button>${T.chordPcs(c).slice(1).map(pc => `<button data-b="${pc}" class="${c.bass === pc ? 'on' : ''}">${esc(T.pcName(pc, S.key))}</button>`).join('')}</div></div>
@@ -255,6 +292,7 @@
       <div class="row"><button class="small" id="eHear">▶ Hear</button><button class="small" id="eLeft" ${i === 0 ? 'disabled' : ''}>← Move</button><button class="small" id="eRight" ${i === S.prog.length - 1 ? 'disabled' : ''}>Move →</button><button class="small" id="eDup">Duplicate</button><span class="spacer"></span><button class="small ghost" id="eDel" style="color:var(--warn)">Delete</button><button class="primary" id="eDone">Done</button></div>`;
     sheet(html, (el) => {
       const rerender = () => { editChord(i); };
+      el.querySelectorAll('.chip.alt').forEach(b => b.addEventListener('click', () => { const a = alts[+b.dataset.i]; c.root = a.root; c.q = a.q; c.bass = a.bass ?? null; c.conf = null; playChord(c, 1.2); rerender(); }));
       el.querySelectorAll('#eRoots button').forEach(b => b.addEventListener('click', () => { c.root = +b.dataset.pc; if (c.bass != null && !T.chordPcs(c).includes(c.bass)) c.bass = null; playChord(c, 1.2); rerender(); }));
       el.querySelectorAll('#eQuals button').forEach(b => b.addEventListener('click', () => { c.q = b.dataset.q; if (c.bass != null && !T.chordPcs(c).includes(c.bass)) c.bass = null; playChord(c, 1.2); rerender(); }));
       el.querySelectorAll('#eBass button').forEach(b => b.addEventListener('click', () => { c.bass = b.dataset.b === '' ? null : +b.dataset.b; playChord(c, 1.2); rerender(); }));
@@ -295,6 +333,7 @@
   $('shadowBtn').addEventListener('click', () => { if (!S.prog.length) return; S.shadow = S.shadow ? null : R.shadow(S.prog, S.key); S.openCard = -1; recompute(); if (S.shadow) toast('The same song in a mirror'); });
   $('ideasHear').dataset.play = '▶ Hear'; $('ideasHear').addEventListener('click', () => playProg(S.prog, S.key, S.style, $('ideasProg')));
   $('ideasEdit').addEventListener('click', () => showTab('listen'));
+  $('ideasMidi').addEventListener('click', () => { if (!S.prog.length) return; downloadFile('progression.mid', Export.midiFile(progItems(S.prog, S.key, S.style), S.settings.bpm, 'Changes'), 'audio/midi'); });
 
   function recompute() {
     renderLens();
@@ -319,7 +358,7 @@
       card.querySelector('[data-act="keep"]').addEventListener('click', (e) => { e.stopPropagation(); keep(o); });
       card.querySelectorAll('.chip').forEach((ch, i) => ch.addEventListener('click', (e) => { e.stopPropagation(); playChord(o.prog[i]); setBrandHue(ch); }));
     });
-    if (S.openCard >= 0 && S.openCard < S.options.length) toggleChart(S.openCard, true);
+    if (S.openCard >= 0 && S.openCard < S.options.length) toggleChart(S.openCard, true); else renderSideChart();
   }
   function cardHTML(o, idx) {
     const depthDots = Array.from({ length: 5 }, (_, i) => `<i class="${i < (o.depth || 1) ? 'on' : ''}"></i>`).join('');
@@ -330,14 +369,29 @@
       <div class="chips scroll">${o.prog.map((c, i) => chipHTML(c, S.key, { i, prog: o.prog })).join('')}</div>
       <div class="rn">${esc(o.roman.join(' – '))}</div>
       <div class="reason">${esc(o.reason)}${o.clashes && o.clashes.length ? ` <span class="q">Clashes with the melody on ${esc(o.clashes.join(', '))}.</span>` : ''}</div>
+      <div class="teach"><b>Practice</b> ${esc(Export.teach(o.family))}</div>
       <div class="actions"><button data-act="hear" data-play="▶ Hear">▶ Hear</button><button data-act="chart">${S.openCard === idx ? 'Hide chart' : 'Chart'}</button><button data-act="keep" class="primary">Keep</button></div>
       <div class="chartwrap" data-chart="${idx}" ${S.openCard === idx ? '' : 'hidden'}></div></div>`;
   }
+  const wide = () => window.matchMedia('(min-width: 1100px)').matches;
   function toggleChart(idx, force) {
     const wasOpen = S.openCard === idx;
     S.openCard = (wasOpen && !force) ? -1 : idx;
-    document.querySelectorAll('.card').forEach(c => { const i = +c.dataset.card; const w = c.querySelector('.chartwrap'); c.classList.toggle('open', i === S.openCard); c.querySelector('[data-act="chart"]').textContent = i === S.openCard ? 'Hide chart' : 'Chart'; if (i === S.openCard) { w.hidden = false; w.innerHTML = ''; w.appendChild(chartEl(S.options[i].prog, S.key, S.style)); if (!force) w.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } else { w.hidden = true; w.innerHTML = ''; } });
+    const host = $('chartHost');
+    document.querySelectorAll('.card').forEach(c => { const i = +c.dataset.card; const w = c.querySelector('.chartwrap'); c.classList.toggle('open', i === S.openCard); c.querySelector('[data-act="chart"]').textContent = i === S.openCard ? 'Hide chart' : 'Chart'; if (i === S.openCard && !wide()) { w.hidden = false; w.innerHTML = ''; w.appendChild(chartEl(S.options[i].prog, S.key, S.style)); if (!force) w.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } else { w.hidden = true; w.innerHTML = ''; } });
+    if (wide()) renderSideChart();
   }
+  // On a wide screen the chart lives beside the options: the open option's, else the working progression's
+  function renderSideChart() {
+    const host = $('chartHost'); host.innerHTML = '';
+    if (!wide() || !S.prog.length) return;
+    const o = S.openCard >= 0 ? S.options[S.openCard] : null;
+    const head = document.createElement('div'); head.className = 'panel tight'; head.style.position = 'sticky'; head.style.top = '0';
+    head.innerHTML = `<div class="row between"><h3>${o ? 'Chart · ' + esc(o.device) : 'Chart · your progression'}</h3><span class="hint">${o ? 'tap another option\'s Chart to switch' : 'open an option to see its chart here'}</span></div>`;
+    head.appendChild(chartEl(o ? o.prog : S.prog, S.key, S.style));
+    host.appendChild(head);
+  }
+  window.addEventListener('resize', () => { if (S.tab === 'ideas') toggleChart(S.openCard, true); });
   // The chart: keyboard strips with voice-leading lines, and fretboard grips.
   function chartEl(prog, key, style, opts = {}) {
     const wrap = document.createElement('div'); wrap.className = 'chart animate'; wrap.style.gap = '8px';
@@ -501,6 +555,16 @@
     }
     return lines.join('\n');
   }
+  function downloadFile(name, data, mime) {
+    try {
+      const blob = data instanceof Uint8Array ? new Blob([data], { type: mime }) : new Blob([data], { type: mime });
+      const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 2000);
+      toast(`${name} saved`);
+    } catch (e) { toast('Could not save the file here'); }
+  }
+  function leadSheetData(song) {
+    return { title: song.title, key: song.key, bpm: song.bpm || S.settings.bpm, sections: song.sections.map(sec => { const idea = sec.ideas[sec.active]; const key = idea ? idea.key : song.key; return { name: sec.name, chords: idea ? idea.chords.map(c => ({ sym: T.chordSymbol(c, key), rn: T.romanNumeral(c, key), beats: c.beats || 4 })) : [], lyrics: sec.lyrics ? sec.lyrics.split('\n').map(line => { const segs = parseLyricLine(line); if (!segs.some(x => x.chord)) return { chordLine: '', textLine: line }; let cl = '', tl = ''; for (const x of segs) { if (x.chord) { while (cl.length < tl.length) cl += ' '; cl += x.chord; } tl += x.text; while (tl.length < cl.length + 1 && x !== segs[segs.length - 1]) tl += ' '; } return { chordLine: cl, textLine: tl }; }) : null }; }) };
+  }
   function copyText(text, okMsg) {
     const done = () => toast(okMsg || 'Copied');
     if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done).catch(() => fallback()); else fallback();
@@ -510,7 +574,9 @@
   $('addSection').addEventListener('click', () => { const s = ensureSong(); newSection(s, nextSectionName(s)); save(); renderSong(); });
   $('exportBtn').addEventListener('click', () => {
     const song = currentSong(); if (!song) { toast('No song yet'); return; }
-    sheet(`<h2>Export</h2><div class="list"><button id="exChart"><b>Copy chord chart</b><small style="margin-left:auto;color:var(--muted)">chords over lyrics, as text</small></button><button id="exJson"><b>Copy backup (JSON)</b><small style="margin-left:auto;color:var(--muted)">all songs</small></button><button id="imJson"><b>Restore from backup</b></button></div>`, (el) => {
+    sheet(`<h2>Export</h2><div class="list"><button id="exPdf"><b>Lead sheet (PDF)</b><small style="margin-left:auto;color:var(--muted)">chords in bars, numerals, lyrics</small></button><button id="exMidi"><b>Voicings (MIDI)</b><small style="margin-left:auto;color:var(--muted)">every section, for Logic or Ableton</small></button><button id="exChart"><b>Copy chord chart</b><small style="margin-left:auto;color:var(--muted)">chords over lyrics, as text</small></button><button id="exJson"><b>Copy backup (JSON)</b><small style="margin-left:auto;color:var(--muted)">all songs</small></button><button id="imJson"><b>Restore from backup</b></button></div>${window.top !== window.self ? '<div class="hint">Downloads do not work inside this preview; use the installed app or the web link.</div>' : ''}`, (el) => {
+      el.querySelector('#exPdf').addEventListener('click', () => { closeSheet(); downloadFile(`${(song.title || 'Untitled').replace(/[^\w\- ]+/g, '')}.pdf`, Export.leadSheetPDF(leadSheetData(song), T.keyName(song.key)), 'application/pdf'); });
+      el.querySelector('#exMidi').addEventListener('click', () => { closeSheet(); const items = []; for (const sec of song.sections) { const idea = sec.ideas[sec.active]; if (idea) items.push(...progItems(idea.chords, idea.key, S.style).map(it => it.events ? it : it)); } if (!items.length) { toast('No chords to export yet'); return; } downloadFile(`${(song.title || 'Untitled').replace(/[^\w\- ]+/g, '')}.mid`, Export.midiFile(items, song.bpm || S.settings.bpm, song.title || 'Changes'), 'audio/midi'); });
       el.querySelector('#exChart').addEventListener('click', () => { closeSheet(); copyText(chartText(song), 'Chart copied'); });
       el.querySelector('#exJson').addEventListener('click', () => { closeSheet(); copyText(JSON.stringify({ changes: 1, songs: S.songs }, null, 1), 'Backup copied'); });
       el.querySelector('#imJson').addEventListener('click', () => { sheet(`<h2>Restore</h2><div class="hint">Paste a backup here. Songs are added; nothing is deleted.</div><textarea class="lyr" id="imTa" placeholder="{ &quot;changes&quot;: 1, ... }"></textarea><div class="row"><button class="primary" id="imGo">Restore</button></div>`, (e2) => { e2.querySelector('#imGo').addEventListener('click', () => { try { const d = JSON.parse(e2.querySelector('#imTa').value); if (!d.songs) throw 0; const ids = new Set(S.songs.map(s => s.id)); let n = 0; d.songs.forEach(s => { if (!ids.has(s.id)) { S.songs.push(s); n++; } }); save(); closeSheet(); renderSong(); toast(`${n} song${n === 1 ? '' : 's'} restored`); } catch (e) { toast('That is not a Changes backup'); } }); }); });
@@ -596,9 +662,10 @@
       <div class="field"><label>Chord symbols</label><div class="seg" id="sSym"><button data-v="plain" class="${st.symbols === 'plain' ? 'on' : ''}">Cmaj7 · Cm7 · Cm7♭5</button><button data-v="jazz" class="${st.symbols === 'jazz' ? 'on' : ''}">CΔ7 · C-7 · Cø7</button></div></div>
       <div class="field"><label>Piano chart</label><div class="row"><button class="small ${st.twoHands ? 'on' : ''}" id="sHands">Two hands</button><div class="seg" id="sSpan"><button data-v="small" class="${st.span === 'small' ? 'on' : ''}">Small hands</button><button data-v="default" class="${st.span === 'default' ? 'on' : ''}">A tenth</button></div></div></div>
       <div class="field"><label>Guitar chart</label><div class="row"><button class="small ${st.fingers ? 'on' : ''}" id="sFingers">Finger numbers</button></div></div>
-      <div class="field"><label>Sound</label><div class="seg" id="sTone"><button data-v="grand" class="${st.sound && st.tone !== 'ep' ? 'on' : ''}">Grand piano</button><button data-v="ep" class="${st.sound && st.tone === 'ep' ? 'on' : ''}">Electric piano</button><button data-v="off" class="${!st.sound ? 'on' : ''}">Off</button></div><div class="row"><div class="seg" id="sFeel"><button data-v="hold" class="${st.feel === 'hold' ? 'on' : ''}">Hold</button><button data-v="groove" class="${st.feel === 'groove' ? 'on' : ''}">Groove</button></div><span class="hint">${A.PIANO.source === 'hosted' ? 'Salamander grand, full set' : A.PIANO.source === 'embedded' ? 'Salamander grand, compact set' : 'grand unavailable here'} · the EP is a tine-model synth</span></div><div class="hint">No sound on iPhone? Flip the ring/silent switch, or turn the volume up — the app tries to play through the media channel, but the switch wins on some iOS versions.</div></div>
+      <div class="field"><label>Sound</label><div class="seg" id="sTone"><button data-v="grand" class="${st.sound && st.tone !== 'ep' ? 'on' : ''}">Grand piano</button><button data-v="ep" class="${st.sound && st.tone === 'ep' ? 'on' : ''}">Electric piano</button><button data-v="off" class="${!st.sound ? 'on' : ''}">Off</button></div><div class="row"><div class="seg" id="sFeel"><button data-v="hold" class="${st.feel === 'hold' ? 'on' : ''}">Hold</button><button data-v="groove" class="${st.feel === 'groove' ? 'on' : ''}">Groove</button><button data-v="asPlayed" class="${st.feel === 'asPlayed' ? 'on' : ''}" ${S.take ? '' : 'disabled title="Record a MIDI take first"'}>As played</button></div><span class="hint">${A.PIANO.source === 'hosted' ? 'Salamander grand, full set' : A.PIANO.source === 'embedded' ? 'Salamander grand, compact set' : 'grand unavailable here'} · the EP is a tine-model synth</span></div><div class="hint">No sound on iPhone? Flip the ring/silent switch, or turn the volume up — the app tries to play through the media channel, but the switch wins on some iOS versions.</div></div>
       <div class="field"><label>Tempo <span id="sBpmLbl" style="font-family:var(--mono);color:var(--fg)">${st.bpm}</span> bpm</label><input type="range" id="sBpm" min="50" max="140" value="${st.bpm}"></div>
       <div class="field"><label>Look</label><div class="seg" id="sLook"><button data-v="night" class="${st.look === 'night' ? 'on' : ''}">Night</button><button data-v="paper" class="${st.look === 'paper' ? 'on' : ''}">Paper</button></div></div>
+      <div class="field"><label>Account and sync</label><div id="sAcct">${accountHTML()}</div></div>
       <div class="field"><label>About</label><div class="hint">Changes ${esc(BUILD)}. Recognition, suggestions, voicings and sound all run on this device; nothing is uploaded. The vocabulary is written by musicians, not generated — every option says why. Piano: Salamander Grand Piano by Alexander Holm (CC BY 3.0).</div><div class="row"><button class="small ghost" id="sOnboard">Show the welcome again</button></div></div>`, (el) => {
       const upd = () => { save(); applyLook(); if (S.tab === 'ideas') recompute(); if (S.tab === 'listen') { renderPad(); renderHeard(); } if (S.tab === 'song') renderSong(); if (S.tab === 'circle') renderCircle(); };
       el.querySelectorAll('#sInst button').forEach(b => b.addEventListener('click', () => { st.instrument = b.dataset.v; el.querySelectorAll('#sInst button').forEach(x => x.classList.toggle('on', x === b)); upd(); }));
@@ -610,10 +677,26 @@
       el.querySelectorAll('#sFeel button').forEach(b => b.addEventListener('click', () => { st.feel = b.dataset.v; el.querySelectorAll('#sFeel button').forEach(x => x.classList.toggle('on', x === b)); upd(); }));
       el.querySelector('#sBpm').addEventListener('input', (e) => { st.bpm = +e.target.value; el.querySelector('#sBpmLbl').textContent = st.bpm; const sg = currentSong(); if (sg) sg.bpm = st.bpm; save(); });
       el.querySelectorAll('#sLook button').forEach(b => b.addEventListener('click', () => { st.look = b.dataset.v; el.querySelectorAll('#sLook button').forEach(x => x.classList.toggle('on', x === b)); upd(); }));
+      wireAccount(el);
       el.querySelector('#sOnboard').addEventListener('click', () => { S.onboarded = false; save(); closeSheet(); renderOnboard(); showTab('listen'); });
     });
   }
   $('settingsBtn').addEventListener('click', settingsSheet);
+  function accountHTML() {
+    if (!Sync.configured()) return `<div class="hint">Sync is not switched on in this build yet. Songs stay on this device; use Export → backup to move them.</div>`;
+    if (Sync.ST.user) return `<div class="row between"><span>Signed in as <b>${esc(Sync.ST.user.email || '')}</b></span><div class="row"><button class="small" id="acctSync">Sync now</button><button class="small ghost" id="acctOut">Sign out</button></div></div><div class="hint">${Sync.ST.last ? 'Last synced ' + new Date(Sync.ST.last).toLocaleTimeString() : 'Songs sync a few seconds after every change.'}</div>`;
+    return `<div class="typerow"><input id="acctEmail" type="email" placeholder="you@email.com" autocomplete="email"><button class="small primary" id="acctGo">Send sign-in link</button></div><div class="hint">No password: a link arrives by email and signs this device in. Your songs then follow you to the phone and the laptop.</div>`;
+  }
+  function wireAccount(el) {
+    const go = el.querySelector('#acctGo'); if (go) go.addEventListener('click', async () => { const em = el.querySelector('#acctEmail').value.trim(); if (!em) return; go.disabled = true; const r = await Sync.signIn(em); toast(r.ok ? 'Check your email for the link' : 'Could not send the link: ' + r.reason, 4000); go.disabled = false; });
+    const out = el.querySelector('#acctOut'); if (out) out.addEventListener('click', () => { Sync.signOut(); el.querySelector('#sAcct').innerHTML = accountHTML(); wireAccount(el); });
+    const sy = el.querySelector('#acctSync'); if (sy) sy.addEventListener('click', async () => { sy.disabled = true; await syncNow(); sy.disabled = false; el.querySelector('#sAcct').innerHTML = accountHTML(); wireAccount(el); });
+  }
+  async function syncNow() {
+    if (!Sync.ST.session) return;
+    const remote = await Sync.pull(); if (remote) { const m = Sync.merge(S.songs, remote); if (m.changed) { S.songs = m.songs; if (S.tab === 'song') renderSong(); } }
+    await Sync.push(S.songs); toast('Synced');
+  }
   function applyLook() { document.documentElement.setAttribute('data-look', S.settings.look === 'paper' ? 'paper' : 'night'); const meta = document.querySelector('meta[name=theme-color]'); if (meta) meta.setAttribute('content', S.settings.look === 'paper' ? '#f1efe9' : '#0d0f14'); }
 
   // ---------- onboarding ----------
@@ -634,7 +717,8 @@
 
   // ---------- boot ----------
   async function boot() {
-    load(); applyLook(); renderKey(); ringPaths(); renderPad(); renderHeard(); renderLens(); renderOnboard();
+    load(); applyLook();
+    try { Sync.loadSession(); if (await Sync.completeFromHash()) { toast('Signed in'); } if (Sync.ST.session) syncNow().catch(() => {}); } catch (e) { /* offline */ } renderKey(); ringPaths(); renderPad(); renderHeard(); renderLens(); renderOnboard();
     setInputMode(S.inputMode || 'mic');
     if (!S.prog.length && !S.onboarded) { /* first run: the welcome card leads */ }
     // piano: full set when hosted next to piano/ (or one folder up, as inside the Shed site), else the compact embedded set

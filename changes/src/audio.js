@@ -146,8 +146,10 @@ const Audio = (() => {
       let t = passStart;
       items.forEach((it, i) => {
         const dur = (it.beats || 4) * spb;
-        const bass = it.notes.filter(n => n < 56), upper = it.notes.filter(n => n >= 56);
-        if (feel === 'groove' && dur >= spb * 2) {
+        const bass = (it.notes || []).filter(n => n < 56), upper = (it.notes || []).filter(n => n >= 56);
+        if (it.events) {
+          for (const ev of it.events) ev.notes.forEach((n, k) => playTone(n, Math.max(0.08, ev.dur * spb), t + ev.at * spb + k * 0.004, ev.vel != null ? ev.vel : 0.62));
+        } else if (feel === 'groove' && dur >= spb * 2) {
           // comp: a full hit on 1, lighter hits on the "and of 2" and on 4; bass on 1 and 3
           const hits = [[0, 0.78], [1.5, 0.42], [3, 0.5]].filter(h => h[0] * spb < dur - 0.05);
           hits.forEach(([b, v], k) => { playNotes(k === 0 ? it.notes : upper, Math.min(dur - b * spb, k === 0 ? dur : spb * 1.4), t + b * spb, v, k === 0 ? 0.014 : 0.008); });
@@ -175,7 +177,25 @@ const Audio = (() => {
   }
 
   // ---------- MIDI ----------
-  const MIDI = { access: null, inputs: [], held: new Map(), pedal: false, sustained: new Set(), onChord: null, onLive: null, onStatus: null, current: null, currentSince: 0, timer: null, active: false };
+  const MIDI = { access: null, inputs: [], held: new Map(), pedal: false, sustained: new Set(), onChord: null, onLive: null, onStatus: null, current: null, currentSince: 0, timer: null, active: false, take: null };
+  function takeStart() { MIDI.take = { t0: performance.now(), events: [] }; }
+  function takeEvent(n, v, on) { if (!MIDI.take) takeStart(); MIDI.take.events.push({ t: performance.now() - MIDI.take.t0, n, v, on }); }
+  // The take as played: notes with absolute times (ms), pedal honored. Returns [{n, v, at, dur}].
+  function takeNotes() {
+    if (!MIDI.take) return [];
+    const out = []; const open = new Map(); let pedal = false; const pedaled = [];
+    for (const e of MIDI.take.events) {
+      if (e.n === -1) { // pedal event
+        pedal = e.on; if (!pedal) { for (const x of pedaled) { if (!open.has(x.n)) x.dur = e.t - x.at; } pedaled.length = 0; }
+        continue;
+      }
+      if (e.on) { if (open.has(e.n)) { const x = open.get(e.n); x.dur = e.t - x.at; } const x = { n: e.n, v: e.v, at: e.t, dur: 0 }; open.set(e.n, x); out.push(x); }
+      else { const x = open.get(e.n); if (x) { open.delete(e.n); if (pedal) { pedaled.push(x); x.dur = 0; } else x.dur = e.t - x.at; } }
+    }
+    const end = MIDI.take.events.length ? MIDI.take.events[MIDI.take.events.length - 1].t + 400 : 0;
+    for (const x of out) if (!x.dur) x.dur = Math.max(80, end - x.at);
+    return out;
+  }
   async function midiStart(handlers = {}) {
     Object.assign(MIDI, handlers);
     if (!navigator.requestMIDIAccess) { MIDI.onStatus && MIDI.onStatus({ ok: false, reason: 'unsupported' }); return false; }
@@ -187,15 +207,15 @@ const Audio = (() => {
       MIDI.inputs.forEach(inp => { inp.onmidimessage = onMidi; });
       MIDI.onStatus && MIDI.onStatus({ ok: true, inputs: MIDI.inputs.map(i => i.name) });
     };
-    MIDI.access.onstatechange = hook; hook(); MIDI.active = true;
+    MIDI.access.onstatechange = hook; hook(); MIDI.active = true; takeStart();
     return true;
   }
   function midiStop() { if (MIDI.access) MIDI.inputs.forEach(i => i.onmidimessage = null); MIDI.active = false; MIDI.held.clear(); MIDI.sustained.clear(); }
   function onMidi(e) {
     const [st, d1, d2] = e.data; const type = st & 0xf0;
-    if (type === 0x90 && d2 > 0) { MIDI.held.set(d1, d2); MIDI.sustained.add(d1); evalMidi(true, d1); }
-    else if (type === 0x80 || (type === 0x90 && d2 === 0)) { MIDI.held.delete(d1); if (!MIDI.pedal) MIDI.sustained.delete(d1); evalMidi(false); }
-    else if (type === 0xb0 && d1 === 64) { const down = d2 >= 64; if (MIDI.pedal && !down) { MIDI.sustained = new Set(MIDI.held.keys()); } MIDI.pedal = down; evalMidi(false); }
+    if (type === 0x90 && d2 > 0) { takeEvent(d1, d2, true); MIDI.held.set(d1, d2); MIDI.sustained.add(d1); evalMidi(true, d1); }
+    else if (type === 0x80 || (type === 0x90 && d2 === 0)) { takeEvent(d1, 0, false); MIDI.held.delete(d1); if (!MIDI.pedal) MIDI.sustained.delete(d1); evalMidi(false); }
+    else if (type === 0xb0 && d1 === 64) { const down = d2 >= 64; takeEvent(-1, d2, down); if (MIDI.pedal && !down) { MIDI.sustained = new Set(MIDI.held.keys()); } MIDI.pedal = down; evalMidi(false); }
   }
   // A take is read as harmony plus melody: a cluster of two or more notes struck together (within 60 ms) is a chord
   // event; a single note struck while a chord is still held is a melody note and is kept with that chord. A chord
@@ -226,14 +246,14 @@ const Audio = (() => {
           if (id) {
             const label = `${id.root}:${id.q}:${id.bass ?? ''}`;
             if (!cur || cur.label !== label) {
-              if (cur && t - MIDI.currentSince > 200 && MIDI.onChord) MIDI.onChord(cur.chord, t - MIDI.currentSince);
+              if (cur && t - MIDI.currentSince > 200 && MIDI.onChord) { cur.chord.span = { start: MIDI.currentSince - MIDI.take.t0, end: t - MIDI.take.t0 }; MIDI.onChord(cur.chord, t - MIDI.currentSince); }
               MIDI.current = { label, chord: Object.assign({}, id, { notes: notes.slice(), melody: [] }) }; MIDI.currentSince = t;
             }
             MIDI.onLive && MIDI.onLive(MIDI.current.chord, held);
           }
         }
       } else if (held.length === 0 && MIDI.current) {
-        if (t - MIDI.currentSince > 200 && MIDI.onChord) MIDI.onChord(MIDI.current.chord, t - MIDI.currentSince);
+        if (t - MIDI.currentSince > 200 && MIDI.onChord) { MIDI.current.chord.span = { start: MIDI.currentSince - MIDI.take.t0, end: t - MIDI.take.t0 }; MIDI.onChord(MIDI.current.chord, t - MIDI.currentSince); }
         MIDI.current = null; MIDI.onLive && MIDI.onLive(null, []);
       }
     }, onset ? 65 : 120);
@@ -301,7 +321,7 @@ const Audio = (() => {
       if (quiet) { if (!MIC.silentSince) MIC.silentSince = now; } else MIC.silentSince = 0;
       if (label && MIC.lastCount >= 3 && (!MIC.current || MIC.current.label !== label)) {
         if (MIC.current && now - MIC.currentSince > 350 && MIC.onChord) MIC.onChord(MIC.current.chord, now - MIC.currentSince);
-        MIC.current = { label, chord: { root: best.root, q: best.q, bass: best.bass, conf: best.conf } }; MIC.currentSince = now;
+        MIC.current = { label, chord: { root: best.root, q: best.q, bass: best.bass, conf: best.conf, alts: best.alts } }; MIC.currentSince = now;
         MIC.onLive && MIC.onLive(MIC.current.chord);
       } else if (MIC.current && MIC.silentSince && now - MIC.silentSince > 500) {
         if (now - MIC.currentSince > 350 && MIC.onChord) MIC.onChord(MIC.current.chord, now - MIC.currentSince);
@@ -315,18 +335,21 @@ const Audio = (() => {
     let n = 0; for (let i = 0; i < 12; i++) n += ch[i] * ch[i]; n = Math.sqrt(n) || 1;
     let bassPc = -1, bm = 0; for (let i = 0; i < 12; i++) if (bass[i] > bm) { bm = bass[i]; bassPc = i; }
     if (bm < 0.5) bassPc = -1;
-    let best = null, second = 0;
+    const scored = [];
     for (const tp of TPL) {
       let dot = 0, outside = 0;
       for (let i = 0; i < 12; i++) { if (tp.t[i] > 0) dot += ch[i] * tp.t[i]; else outside += ch[i]; }
       let s = dot / (n * tp.norm) - 0.22 * outside / n;
       s -= tp.size * 0.012; // prefer the simplest chord that explains the energy
       if (bassPc >= 0) { if (bassPc === tp.root) s += 0.08; else if (tp.t[bassPc] > 0) s += 0.02; else s -= 0.05; }
-      if (!best || s > best.s) { if (best) second = best.s; best = { s, root: tp.root, q: tp.q }; } else if (s > second) second = s;
+      scored.push({ s, root: tp.root, q: tp.q, tp });
     }
-    if (!best) return null;
-    const bassOut = (bassPc >= 0 && bassPc !== best.root && TPL.find(t => t.root === best.root && t.q === best.q).t[bassPc] > 0) ? bassPc : null;
-    return { root: best.root, q: best.q, bass: bassOut, conf: Math.max(0, best.s - second), score: best.s };
+    scored.sort((a, b) => b.s - a.s);
+    const best = scored[0]; if (!best) return null;
+    const second = scored[1] ? scored[1].s : 0;
+    const bassFor = (c) => (bassPc >= 0 && bassPc !== c.root && c.tp.t[bassPc] > 0) ? bassPc : null;
+    const alts = scored.slice(1, 4).filter(c => c.s > best.s - 0.12).map(c => ({ root: c.root, q: c.q, bass: bassFor(c) }));
+    return { root: best.root, q: best.q, bass: bassFor(best), conf: Math.max(0, best.s - second), score: best.s, alts };
   }
   function micStop() {
     MIC.active = false; if (MIC.raf) cancelAnimationFrame(MIC.raf);
@@ -337,6 +360,6 @@ const Audio = (() => {
     MIC.stream = null;
   }
 
-  return { ensureCtx, unmuteIOS, setTone, SOUND, get ctx() { return ctx; }, pianoInit, pianoPreload, playTone, playNotes, play, stop, PLAYER, PIANO, midiStart, midiStop, MIDI, micStart, micStop, MIC, matchChroma };
+  return { ensureCtx, unmuteIOS, setTone, SOUND, takeStart, takeNotes, get ctx() { return ctx; }, pianoInit, pianoPreload, playTone, playNotes, play, stop, PLAYER, PIANO, midiStart, midiStop, MIDI, micStart, micStop, MIC, matchChroma };
 })();
 if (typeof module !== 'undefined') module.exports = Audio;

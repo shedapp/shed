@@ -522,6 +522,7 @@ const Theory = (() => {
     cands.sort((a, b) => b.score - a.score);
     best = cands[0];
     const chord = { root: best.root, q: best.q, bass: (bassPc >= 0 && bassPc !== best.root) ? bassPc : null, score: best.score, extra: best.extra, missing: best.missing };
+    chord.alts = cands.slice(1, 4).filter(c => c.score > best.score - 1.2).map(c => ({ root: c.root, q: c.q, bass: (bassPc >= 0 && bassPc !== c.root) ? bassPc : null }));
     return chord;
   }
 
