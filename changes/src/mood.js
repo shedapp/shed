@@ -146,6 +146,34 @@ const Mood = (() => {
     return s;
   }
 
-  return { chordMood, progressionMood, hueFor, css, vars, TARGETS, moodMatch, WORDS };
+  // ---------- The emotion wheel: GEMS, the Geneva Emotional Music Scale (Zentner, Grandjean & Scherer 2008) ----------
+  // Nine factors of music-evoked emotion, each with its own terms; three superfactors (sublimity, vitality, unease).
+  // Each factor maps to a region of the brightness/tension plane, the color words that earn it, and the devices
+  // most often behind it. Sub-terms nudge the target inside the region.
+  const GEMS = [
+    { id: 'wonder', name: 'Wonder', sup: 'sublimity', hue: 262, b: .72, t: .50, favor: ['wonder', 'lifted', 'shimmering', 'noble', 'glossy'], fam: ['chromaticMediant', 'lydianII', 'lydianIV', 'pantriadic', 'modalCast', 'hexPole', 'planing'], terms: { moved: [-.06, 0], amazed: [.04, .06], dazzled: [.08, .04], allured: [-.02, -.06], happy: [.1, -.08] } },
+    { id: 'transcendence', name: 'Transcendence', sup: 'sublimity', hue: 232, b: .62, t: .56, favor: ['wonder', 'noble', 'floating', 'uncanny', 'suspense'], fam: ['constantThirds', 'pantriadic', 'coltrane', 'countdown', 'dominantPedal', 'hexPole', 'shadow', 'constant', 'quartalVamp'], terms: { inspired: [.06, -.04], spiritual: [-.04, -.06], thrills: [.04, .12], transcendent: [0, 0] } },
+    { id: 'tenderness', name: 'Tenderness', sup: 'sublimity', hue: 340, b: .52, t: .32, favor: ['tender', 'velvet', 'warm', 'nostalgic', 'settled'], fam: ['recolor', 'minorPlagal', 'susHybrid', 'walkDown', 'slashBass', 'lineCliche', 'importantMinor'], terms: { 'in love': [.04, -.02], sensual: [-.04, .04], affectionate: [.04, -.04], tender: [0, 0], 'softened-up': [-.02, -.06] } },
+    { id: 'nostalgia', name: 'Nostalgia', sup: 'sublimity', hue: 300, b: .42, t: .40, favor: ['nostalgic', 'bittersweet', 'wistful', 'melancholy', 'tender'], fam: ['minorPlagal', 'backdoor', 'flatSix', 'lineCliche', 'lament', 'deceptive', 'halfDimTwo'], terms: { sentimental: [.05, -.03], dreamy: [.04, -.06], nostalgic: [0, 0], melancholic: [-.1, .02] } },
+    { id: 'peacefulness', name: 'Peacefulness', sup: 'sublimity', hue: 170, b: .70, t: .24, favor: ['settled', 'warm', 'floating', 'open', 'dreamy'], fam: ['pedal', 'susHybrid', 'recolor', 'noLanding', 'loopTwoFive', 'modalCast', 'sus'], terms: { calm: [0, -.02], relaxed: [.03, -.04], serene: [.05, -.06], soothed: [-.03, -.04], meditative: [-.06, -.02] } },
+    { id: 'joy', name: 'Joyful activation', sup: 'vitality', hue: 48, b: .86, t: .40, favor: ['open', 'lifted', 'earthy', 'shimmering', 'hopeful'], fam: ['flatSeven', 'planeUp', 'canon', 'sus', 'bluesSevenths', 'mario', 'walkDown', 'picardy'], terms: { stimulated: [0, .08], joyful: [.04, -.02], animated: [.02, .06], 'feel like dancing': [0, .1], amused: [.02, -.04] } },
+    { id: 'power', name: 'Power', sup: 'vitality', hue: 12, b: .74, t: .62, favor: ['triumphant', 'noble', 'church', 'pulling home', 'earthy'], fam: ['mario', 'gospelWalk', 'gospelWalkUp', 'backcycle', 'twoStep', 'dominantPedal', 'altered', 'domChainDown'], terms: { energetic: [.04, .06], triumphant: [.08, -.04], fiery: [-.04, .12], strong: [.02, .02], heroic: [.08, .02] } },
+    { id: 'tension', name: 'Tension', sup: 'unease', hue: 352, b: .34, t: .82, favor: ['on edge', 'gritty', 'suspense', 'pulling home', 'smoky'], fam: ['altered', 'tritoneSub', 'passingDim', 'augSixth', 'augSixthVariants', 'ctDim', 'domChainDown', 'halfDimTwo', 'tritoneChain'], terms: { agitated: [0, .06], nervous: [-.04, .04], tense: [0, 0], impatient: [.04, .06], irritated: [-.06, .08] } },
+    { id: 'sadness', name: 'Sadness', sup: 'unease', hue: 215, b: .24, t: .44, favor: ['melancholy', 'dark', 'pathos', 'yearning', 'noir'], fam: ['lament', 'neapolitan', 'minorPlagal', 'halfDimTwo', 'parallelMinor', 'minorTwoFive', 'flatSix'], terms: { sad: [0, 0], sorrowful: [-.06, .06], 'softly sad': [.06, -.06] } },
+  ];
+  const gemsById = (id) => GEMS.find(g => g.id === id);
+  // match an option's reading to a wheel pick; target = 'factor' or 'factor:term'
+  function gemsMatch(reading, target, family) {
+    const [fid, term] = String(target).split(':'); const g = gemsById(fid); if (!g) return 0;
+    let b = g.b, t = g.t; if (term && g.terms[term]) { b += g.terms[term][0]; t += g.terms[term][1]; }
+    let sc = 1 - Math.hypot(reading.bright - b, reading.tension - t) * 1.3;
+    for (const w of reading.words) if (g.favor.includes(w)) sc += 0.3;
+    if (family && g.fam.includes(family)) sc += 0.45;
+    return sc;
+  }
+  // the factor a reading sits closest to, for labeling
+  function gemsOf(reading, family) { let best = null, bs = -Infinity; for (const g of GEMS) { const sc = gemsMatch(reading, g.id, family); if (sc > bs) { bs = sc; best = g; } } return best; }
+
+  return { chordMood, progressionMood, hueFor, css, vars, TARGETS, moodMatch, WORDS, GEMS, gemsById, gemsMatch, gemsOf };
 })();
 if (typeof module !== 'undefined') module.exports = Mood;

@@ -100,6 +100,10 @@ h3{margin:0;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:v
 .chip .mel{position:absolute;top:3px;right:6px;font-size:10px;opacity:.75;font-family:var(--body)}
 .chip .unsure-dot{position:absolute;top:6px;left:6px;width:6px;height:6px;border-radius:50%;background:var(--warn);opacity:.9}
 .chip.unsure{border-style:dashed}
+.wheelwrap{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.wheelwrap svg.wheel{width:200px;height:200px;flex:0 0 auto}
+.wheelside{flex:1;min-width:160px;display:flex;flex-direction:column;gap:8px}
+.words .gem{display:inline-block;padding:1px 7px;border-radius:999px;font-size:11px;font-weight:600;color:#fff;background:hsl(var(--gh) 50% calc(42% + var(--lshift) * 0.6));margin-right:4px;vertical-align:1px}
 .card .teach{font-size:13px;color:var(--muted);line-height:1.45;border-top:1px dashed var(--line);padding-top:8px}
 .card .teach b{color:var(--fg);font-weight:600;margin-right:4px}
 .chip.ghost{border-style:dashed;color:var(--muted);font-family:var(--body);font-weight:500;font-size:14px}
@@ -326,7 +330,7 @@ kbd{font-family:var(--mono);background:var(--panel2);border:1px solid var(--line
           <div class="depth"><span class="hint">Depth</span><button class="small icon" id="depthDown" aria-label="Less depth">−</button><div class="dots" id="depthDots"></div><button class="small icon" id="depthUp" aria-label="More depth">+</button></div>
           <span class="hint" id="styleBlurb"></span>
         </div>
-        <div class="hscroll" id="moodChips"></div>
+        <div id="moodChips"></div>
       </div>
       <div class="twocol ideas">
         <div class="list" id="options"><div class="hint">Confirm a progression on Listen, then come here.</div></div>
@@ -1073,7 +1077,35 @@ const Mood = (() => {
     return s;
   }
 
-  return { chordMood, progressionMood, hueFor, css, vars, TARGETS, moodMatch, WORDS };
+  // ---------- The emotion wheel: GEMS, the Geneva Emotional Music Scale (Zentner, Grandjean & Scherer 2008) ----------
+  // Nine factors of music-evoked emotion, each with its own terms; three superfactors (sublimity, vitality, unease).
+  // Each factor maps to a region of the brightness/tension plane, the color words that earn it, and the devices
+  // most often behind it. Sub-terms nudge the target inside the region.
+  const GEMS = [
+    { id: 'wonder', name: 'Wonder', sup: 'sublimity', hue: 262, b: .72, t: .50, favor: ['wonder', 'lifted', 'shimmering', 'noble', 'glossy'], fam: ['chromaticMediant', 'lydianII', 'lydianIV', 'pantriadic', 'modalCast', 'hexPole', 'planing'], terms: { moved: [-.06, 0], amazed: [.04, .06], dazzled: [.08, .04], allured: [-.02, -.06], happy: [.1, -.08] } },
+    { id: 'transcendence', name: 'Transcendence', sup: 'sublimity', hue: 232, b: .62, t: .56, favor: ['wonder', 'noble', 'floating', 'uncanny', 'suspense'], fam: ['constantThirds', 'pantriadic', 'coltrane', 'countdown', 'dominantPedal', 'hexPole', 'shadow', 'constant', 'quartalVamp'], terms: { inspired: [.06, -.04], spiritual: [-.04, -.06], thrills: [.04, .12], transcendent: [0, 0] } },
+    { id: 'tenderness', name: 'Tenderness', sup: 'sublimity', hue: 340, b: .52, t: .32, favor: ['tender', 'velvet', 'warm', 'nostalgic', 'settled'], fam: ['recolor', 'minorPlagal', 'susHybrid', 'walkDown', 'slashBass', 'lineCliche', 'importantMinor'], terms: { 'in love': [.04, -.02], sensual: [-.04, .04], affectionate: [.04, -.04], tender: [0, 0], 'softened-up': [-.02, -.06] } },
+    { id: 'nostalgia', name: 'Nostalgia', sup: 'sublimity', hue: 300, b: .42, t: .40, favor: ['nostalgic', 'bittersweet', 'wistful', 'melancholy', 'tender'], fam: ['minorPlagal', 'backdoor', 'flatSix', 'lineCliche', 'lament', 'deceptive', 'halfDimTwo'], terms: { sentimental: [.05, -.03], dreamy: [.04, -.06], nostalgic: [0, 0], melancholic: [-.1, .02] } },
+    { id: 'peacefulness', name: 'Peacefulness', sup: 'sublimity', hue: 170, b: .70, t: .24, favor: ['settled', 'warm', 'floating', 'open', 'dreamy'], fam: ['pedal', 'susHybrid', 'recolor', 'noLanding', 'loopTwoFive', 'modalCast', 'sus'], terms: { calm: [0, -.02], relaxed: [.03, -.04], serene: [.05, -.06], soothed: [-.03, -.04], meditative: [-.06, -.02] } },
+    { id: 'joy', name: 'Joyful activation', sup: 'vitality', hue: 48, b: .86, t: .40, favor: ['open', 'lifted', 'earthy', 'shimmering', 'hopeful'], fam: ['flatSeven', 'planeUp', 'canon', 'sus', 'bluesSevenths', 'mario', 'walkDown', 'picardy'], terms: { stimulated: [0, .08], joyful: [.04, -.02], animated: [.02, .06], 'feel like dancing': [0, .1], amused: [.02, -.04] } },
+    { id: 'power', name: 'Power', sup: 'vitality', hue: 12, b: .74, t: .62, favor: ['triumphant', 'noble', 'church', 'pulling home', 'earthy'], fam: ['mario', 'gospelWalk', 'gospelWalkUp', 'backcycle', 'twoStep', 'dominantPedal', 'altered', 'domChainDown'], terms: { energetic: [.04, .06], triumphant: [.08, -.04], fiery: [-.04, .12], strong: [.02, .02], heroic: [.08, .02] } },
+    { id: 'tension', name: 'Tension', sup: 'unease', hue: 352, b: .34, t: .82, favor: ['on edge', 'gritty', 'suspense', 'pulling home', 'smoky'], fam: ['altered', 'tritoneSub', 'passingDim', 'augSixth', 'augSixthVariants', 'ctDim', 'domChainDown', 'halfDimTwo', 'tritoneChain'], terms: { agitated: [0, .06], nervous: [-.04, .04], tense: [0, 0], impatient: [.04, .06], irritated: [-.06, .08] } },
+    { id: 'sadness', name: 'Sadness', sup: 'unease', hue: 215, b: .24, t: .44, favor: ['melancholy', 'dark', 'pathos', 'yearning', 'noir'], fam: ['lament', 'neapolitan', 'minorPlagal', 'halfDimTwo', 'parallelMinor', 'minorTwoFive', 'flatSix'], terms: { sad: [0, 0], sorrowful: [-.06, .06], 'softly sad': [.06, -.06] } },
+  ];
+  const gemsById = (id) => GEMS.find(g => g.id === id);
+  // match an option's reading to a wheel pick; target = 'factor' or 'factor:term'
+  function gemsMatch(reading, target, family) {
+    const [fid, term] = String(target).split(':'); const g = gemsById(fid); if (!g) return 0;
+    let b = g.b, t = g.t; if (term && g.terms[term]) { b += g.terms[term][0]; t += g.terms[term][1]; }
+    let sc = 1 - Math.hypot(reading.bright - b, reading.tension - t) * 1.3;
+    for (const w of reading.words) if (g.favor.includes(w)) sc += 0.3;
+    if (family && g.fam.includes(family)) sc += 0.45;
+    return sc;
+  }
+  // the factor a reading sits closest to, for labeling
+  function gemsOf(reading, family) { let best = null, bs = -Infinity; for (const g of GEMS) { const sc = gemsMatch(reading, g.id, family); if (sc > bs) { bs = sc; best = g; } } return best; }
+
+  return { chordMood, progressionMood, hueFor, css, vars, TARGETS, moodMatch, WORDS, GEMS, gemsById, gemsMatch, gemsOf };
 })();
 if (typeof module !== 'undefined') module.exports = Mood;
 
@@ -1169,10 +1201,10 @@ const Reharm = (() => {
         }
         return null;
       },
-      t: { recolor: [1, 1.0], sus: [1, 0.9], slashBass: [1, 1.2], twoFive: [2, 0.6], secondaryDom: [3, 0.9], fnSwap: [2, 0.8], deceptive: [2, 0.7], minorPlagal: [2, 1.4], flatSix: [3, 0.9], flatSeven: [2, 1.1], mario: [3, 0.9], picardy: [3, 0.6], lydianII: [3, 0.5], lineCliche: [3, 0.8], susHybrid: [3, 0.7], passingDim: [3, 0.5], chromaticMediant: [3, 0.6], parallelMinor: [3, 0.6], backdoor: [3, 0.4], walkDown: [2, 1.3], planeUp: [2, 0.8], sequenceFifths: [3, 0.6], lament: [2, 1.0] },
+      t: { recolor: [1, 1.0], sus: [1, 0.9], slashBass: [1, 1.2], twoFive: [2, 0.6], secondaryDom: [3, 0.9], fnSwap: [2, 0.8], deceptive: [2, 0.7], minorPlagal: [2, 1.4], flatSix: [3, 0.9], flatSeven: [2, 1.1], mario: [3, 0.9], picardy: [3, 0.6], lydianII: [3, 0.5], lineCliche: [3, 0.8], susHybrid: [3, 0.7], passingDim: [3, 0.5], chromaticMediant: [3, 0.6], parallelMinor: [3, 0.6], backdoor: [3, 0.4], walkDown: [2, 1.3], planeUp: [2, 0.8], sequenceFifths: [3, 0.6], lament: [2, 1.0], deceptiveSecondary: [3, 0.6], bluesSevenths: [2, 0.7], hybridCadence: [3, 0.7], canon: [2, 0.9], dominantPedal: [3, 0.6], modalCast: [3, 0.7] },
     },
     neosoul: {
-      id: 'neosoul', name: 'Neo-soul', blurb: 'Neo-soul and R&B: 9ths and 11ths, sus hybrids, Lydian IV, planing, pedal bass. Warm and floating.', ceiling: 4,
+      id: 'neosoul', name: 'Neo-soul', blurb: 'Neo-soul and R&B: 9ths and 11ths, sus hybrids, Lydian IV, planing, pedal bass. Warm and floating.', ceiling: 5,
       recolor(c, key, d, i, prog) {
         const r = rel(c, key), k = cat(c), major = key.mode === 'major';
         if (major) {
@@ -1196,7 +1228,7 @@ const Reharm = (() => {
         }
         return null;
       },
-      t: { recolor: [1, 1.4], slashBass: [1, 0.7], pedal: [3, 1.0], twoFive: [2, 0.8], secondaryDom: [2, 0.7], fnSwap: [2, 0.8], deceptive: [2, 0.5], backdoor: [3, 0.9], turnaround: [3, 0.6], minorPlagal: [2, 1.0], flatSix: [3, 0.9], flatSeven: [3, 0.6], lydianII: [4, 0.7], halfDimTwo: [3, 0.8], planing: [4, 1.3], noLanding: [3, 1.0], passingDim: [4, 0.5], tritoneSub: [4, 0.8], chromaticMediant: [4, 0.8], lineCliche: [3, 0.7], susHybrid: [3, 1.3], lydianIV: [4, 1.2], altered: [4, 0.5], constant: [4, 0.6], dorian: [2, 1.0], walkDown: [2, 0.8], chromaticMinorDescent: [3, 1.4], slideMinorThird: [3, 1.0], loopTwoFive: [3, 0.9], minorTwoFive: [3, 0.7], backcycle: [4, 0.6], lament: [2, 0.8] },
+      t: { recolor: [1, 1.4], slashBass: [1, 0.7], pedal: [3, 1.0], twoFive: [2, 0.8], secondaryDom: [2, 0.7], fnSwap: [2, 0.8], deceptive: [2, 0.5], backdoor: [3, 0.9], turnaround: [3, 0.6], minorPlagal: [2, 1.0], flatSix: [3, 0.9], flatSeven: [3, 0.6], lydianII: [4, 0.7], halfDimTwo: [3, 0.8], planing: [4, 1.3], noLanding: [3, 1.0], passingDim: [4, 0.5], tritoneSub: [4, 0.8], chromaticMediant: [4, 0.8], lineCliche: [3, 0.7], susHybrid: [3, 1.3], lydianIV: [4, 1.2], altered: [4, 0.5], constant: [4, 0.6], dorian: [2, 1.0], walkDown: [2, 0.8], chromaticMinorDescent: [3, 1.4], slideMinorThird: [3, 1.0], loopTwoFive: [3, 0.9], minorTwoFive: [3, 0.7], backcycle: [4, 0.6], lament: [2, 0.8], importantMinor: [3, 0.8], hybridCadence: [3, 1.1], quartalVamp: [4, 1.0], twoStep: [4, 0.7], dominantPedal: [3, 0.6], modalCast: [3, 0.7], dominantFamily: [4, 0.6], constantThirds: [4, 0.5] },
     },
     gospel: {
       id: 'gospel', name: 'Gospel', blurb: 'Contemporary gospel: 2-5-1s with 13ths, passing diminisheds, chromatic walk-ups, tritone subs, altered dominants. Church.', ceiling: 5,
@@ -1222,7 +1254,7 @@ const Reharm = (() => {
         }
         return null;
       },
-      t: { recolor: [1, 1.2], sus: [1, 1.0], slashBass: [1, 1.0], pedal: [3, 0.5], twoFive: [2, 1.2], secondaryDom: [2, 1.2], fnSwap: [2, 0.6], deceptive: [2, 0.6], backdoor: [3, 0.9], turnaround: [3, 1.2], minorPlagal: [2, 1.0], flatSix: [3, 0.8], mario: [3, 0.6], picardy: [2, 0.8], halfDimTwo: [3, 0.8], passingDim: [3, 1.5], gospelWalk: [3, 1.6], ctDim: [4, 0.8], tritoneSub: [3, 1.2], tritoneChain: [4, 1.0], gospelWalkUp: [4, 1.3], domChainDown: [5, 1.0], susHybrid: [3, 1.0], altered: [4, 1.2], sixthDim: [5, 0.9], lineCliche: [3, 0.6], walkDown: [2, 1.0], gospelDescent: [3, 1.4], backcycle: [4, 1.3], minorTwoFive: [3, 0.9], preacher: [4, 1.1], chromaticMinorDescent: [4, 0.8], dameron: [5, 0.7], lament: [2, 0.7] },
+      t: { recolor: [1, 1.2], sus: [1, 1.0], slashBass: [1, 1.0], pedal: [3, 0.5], twoFive: [2, 1.2], secondaryDom: [2, 1.2], fnSwap: [2, 0.6], deceptive: [2, 0.6], backdoor: [3, 0.9], turnaround: [3, 1.2], minorPlagal: [2, 1.0], flatSix: [3, 0.8], mario: [3, 0.6], picardy: [2, 0.8], halfDimTwo: [3, 0.8], passingDim: [3, 1.5], gospelWalk: [3, 1.6], ctDim: [4, 0.8], tritoneSub: [3, 1.2], tritoneChain: [4, 1.0], gospelWalkUp: [4, 1.3], domChainDown: [5, 1.0], susHybrid: [3, 1.0], altered: [4, 1.2], sixthDim: [5, 0.9], lineCliche: [3, 0.6], walkDown: [2, 1.0], gospelDescent: [3, 1.4], backcycle: [4, 1.3], minorTwoFive: [3, 0.9], preacher: [4, 1.1], chromaticMinorDescent: [4, 0.8], dameron: [5, 0.7], lament: [2, 0.7], dominantFamily: [4, 1.1], importantMinor: [3, 1.0], minorSixthDim: [4, 0.9], deceptiveSecondary: [3, 0.9], bluesSevenths: [2, 1.0], hybridCadence: [3, 1.0], twoStep: [3, 1.4], dominantPedal: [4, 0.7], quartalVamp: [5, 0.5] },
     },
     jazz: {
       id: 'jazz', name: 'Jazz', blurb: 'Standards to postbop: ii–V insertion, tritone subs, the backdoor, Coltrane cycles, altered dominants, rootless voicings.', ceiling: 5,
@@ -1249,15 +1281,15 @@ const Reharm = (() => {
         }
         return null;
       },
-      t: { recolor: [1, 1.2], slashBass: [2, 0.4], twoFive: [1, 1.4], secondaryDom: [2, 1.0], fnSwap: [1, 0.7], deceptive: [2, 0.6], backdoor: [2, 1.3], turnaround: [2, 1.2], minorPlagal: [2, 0.8], flatSix: [3, 0.6], halfDimTwo: [3, 0.9], planing: [4, 0.6], passingDim: [3, 1.0], ctDim: [4, 0.7], tritoneSub: [3, 1.5], tritoneChain: [4, 1.2], susHybrid: [3, 0.8], lydianIV: [4, 0.9], altered: [4, 1.3], constant: [5, 0.8], sixthDim: [5, 0.9], coltrane: [5, 1.0], lineCliche: [3, 0.5], chromaticMediant: [4, 0.4], chromaticMinorDescent: [4, 1.0], backcycle: [4, 1.1], dameron: [5, 1.0], minorTwoFive: [3, 1.1], sequenceFifths: [3, 0.7], lament: [2, 0.8], slideMinorThird: [4, 0.5] },
+      t: { recolor: [1, 1.2], slashBass: [2, 0.4], twoFive: [1, 1.4], secondaryDom: [2, 1.0], fnSwap: [1, 0.7], deceptive: [2, 0.6], backdoor: [2, 1.3], turnaround: [2, 1.2], minorPlagal: [2, 0.8], flatSix: [3, 0.6], halfDimTwo: [3, 0.9], planing: [4, 0.6], passingDim: [3, 1.0], ctDim: [4, 0.7], tritoneSub: [3, 1.5], tritoneChain: [4, 1.2], susHybrid: [3, 0.8], lydianIV: [4, 0.9], altered: [4, 1.3], constant: [5, 0.8], sixthDim: [5, 0.9], coltrane: [5, 1.0], lineCliche: [3, 0.5], chromaticMediant: [4, 0.4], chromaticMinorDescent: [4, 1.0], backcycle: [4, 1.1], dameron: [5, 1.0], minorTwoFive: [3, 1.1], sequenceFifths: [3, 0.7], lament: [2, 0.8], slideMinorThird: [4, 0.5], dominantFamily: [4, 1.2], importantMinor: [3, 0.9], minorSixthDim: [4, 1.0], deceptiveSecondary: [3, 0.7], constantThirds: [5, 0.9], countdown: [5, 1.2], quartalVamp: [4, 1.0], twoStep: [3, 0.8], modalCast: [4, 0.5], hybridCadence: [3, 0.6] },
     },
     classical: {
-      id: 'classical', name: 'Classical', blurb: 'Common-practice and Romantic harmony: inversions and suspensions, applied chords, the Neapolitan, augmented sixths, deceptive cadences, chromatic mediants.', ceiling: 4,
+      id: 'classical', name: 'Classical', blurb: 'Common-practice and Romantic harmony: inversions and suspensions, applied chords, the Neapolitan, augmented sixths, deceptive cadences, chromatic mediants.', ceiling: 5,
       recolor() { return null; },
-      t: { slashBass: [1, 1.4], sus: [1, 0.8], secondaryDom: [2, 1.2], deceptive: [2, 1.2], minorPlagal: [2, 1.0], flatSix: [2, 0.9], picardy: [2, 1.0], neapolitan: [3, 1.3], passingDim: [3, 0.9], ctDim: [4, 1.0], augSixth: [3, 1.4], chromaticMediant: [4, 1.0], parallelMinor: [3, 0.7], lineCliche: [3, 0.6], hexPole: [4, 0.6], walkDown: [2, 1.0], sequenceFifths: [2, 1.3], lament: [2, 1.4], pantriadic: [4, 0.8], planeUp: [3, 0.6] },
+      t: { slashBass: [1, 1.4], sus: [1, 0.8], secondaryDom: [2, 1.2], deceptive: [2, 1.2], minorPlagal: [2, 1.0], flatSix: [2, 0.9], picardy: [2, 1.0], neapolitan: [3, 1.3], passingDim: [3, 0.9], ctDim: [4, 1.0], augSixth: [3, 1.4], chromaticMediant: [4, 1.0], parallelMinor: [3, 0.7], lineCliche: [3, 0.6], hexPole: [4, 0.6], walkDown: [2, 1.0], sequenceFifths: [2, 1.3], lament: [2, 1.4], pantriadic: [4, 0.8], planeUp: [3, 0.6], augSixthVariants: [3, 1.2], canon: [2, 1.2], dominantPedal: [3, 1.0], deceptiveSecondary: [3, 0.9], modalCast: [4, 0.5], constantThirds: [4, 0.6] },
     },
     film: {
-      id: 'film', name: 'Film', blurb: 'Orchestral and cinematic: chromatic mediants for wonder, Lydian lifts, the Mario cadence, pedal points, planing triads.', ceiling: 4,
+      id: 'film', name: 'Film', blurb: 'Orchestral and cinematic: chromatic mediants for wonder, Lydian lifts, the Mario cadence, pedal points, planing triads.', ceiling: 5,
       recolor(c, key, d, i, prog) {
         const r = rel(c, key), k = cat(c);
         if (d < 2) return null;
@@ -1266,7 +1298,7 @@ const Reharm = (() => {
         if ((r === 9 || r === 2) && k === 'min' && d >= 3) return 'madd9';
         return null;
       },
-      t: { recolor: [2, 0.7], sus: [1, 1.0], slashBass: [1, 0.9], pedal: [3, 1.1], deceptive: [2, 0.6], minorPlagal: [2, 1.2], flatSix: [2, 1.3], flatSeven: [2, 1.0], mario: [3, 1.4], picardy: [2, 0.7], lydianII: [3, 1.4], neapolitan: [4, 0.5], chromaticMediant: [3, 1.6], parallelMinor: [3, 1.0], hexPole: [4, 1.0], augSixth: [4, 0.5], lydianIV: [4, 0.8], lineCliche: [3, 0.5], susHybrid: [4, 0.5], walkDown: [2, 0.7], pantriadic: [3, 1.5], planeUp: [2, 1.0], lament: [2, 1.1], sequenceFifths: [3, 0.5] },
+      t: { recolor: [2, 0.7], sus: [1, 1.0], slashBass: [1, 0.9], pedal: [3, 1.1], deceptive: [2, 0.6], minorPlagal: [2, 1.2], flatSix: [2, 1.3], flatSeven: [2, 1.0], mario: [3, 1.4], picardy: [2, 0.7], lydianII: [3, 1.4], neapolitan: [4, 0.5], chromaticMediant: [3, 1.6], parallelMinor: [3, 1.0], hexPole: [4, 1.0], augSixth: [4, 0.5], lydianIV: [4, 0.8], lineCliche: [3, 0.5], susHybrid: [4, 0.5], walkDown: [2, 0.7], pantriadic: [3, 1.5], planeUp: [2, 1.0], lament: [2, 1.1], sequenceFifths: [3, 0.5], hybridCadence: [3, 1.2], dominantPedal: [3, 1.3], modalCast: [2, 1.4], constantThirds: [4, 1.1], canon: [2, 0.6], augSixthVariants: [4, 0.6], quartalVamp: [4, 0.7] },
     },
     lofi: {
       id: 'lofi', name: 'Lo-fi', blurb: 'Hip-hop and lo-fi loops: m9 and maj9 planing, Dorian vamps, ii–V with no I, loops that never land.', ceiling: 3,
@@ -1288,7 +1320,7 @@ const Reharm = (() => {
         }
         return null;
       },
-      t: { recolor: [1, 1.5], pedal: [3, 0.7], twoFive: [2, 0.7], fnSwap: [2, 0.9], minorPlagal: [2, 1.0], flatSeven: [2, 0.8], flatSix: [3, 0.6], planing: [3, 1.4], noLanding: [2, 1.5], dorian: [2, 1.4], susHybrid: [3, 1.0], lydianIV: [3, 0.8], chromaticMediant: [3, 0.6], lineCliche: [3, 0.5], tritoneSub: [3, 0.5], backdoor: [3, 0.6], chromaticMinorDescent: [3, 1.2], slideMinorThird: [2, 1.2], loopTwoFive: [2, 1.4], lament: [2, 0.8], walkDown: [2, 0.6] },
+      t: { recolor: [1, 1.5], pedal: [3, 0.7], twoFive: [2, 0.7], fnSwap: [2, 0.9], minorPlagal: [2, 1.0], flatSeven: [2, 0.8], flatSix: [3, 0.6], planing: [3, 1.4], noLanding: [2, 1.5], dorian: [2, 1.4], susHybrid: [3, 1.0], lydianIV: [3, 0.8], chromaticMediant: [3, 0.6], lineCliche: [3, 0.5], tritoneSub: [3, 0.5], backdoor: [3, 0.6], chromaticMinorDescent: [3, 1.2], slideMinorThird: [2, 1.2], loopTwoFive: [2, 1.4], lament: [2, 0.8], walkDown: [2, 0.6], quartalVamp: [3, 1.2], hybridCadence: [3, 0.8], modalCast: [2, 0.9], importantMinor: [3, 0.6], bluesSevenths: [2, 0.7] },
     },
   };
   const STYLE_ORDER = ['pop', 'neosoul', 'gospel', 'jazz', 'classical', 'film', 'lofi'];
@@ -2035,6 +2067,166 @@ const Reharm = (() => {
     return res.slice(0, 1);
   };
 
+
+  // ---------- deeper: Barry Harris, Berklee Harmony 4, Coltrane, the Romantic chromatic toolkit ----------
+  X.dominantFamily = (prog, key, s, d) => {
+    const res = [];
+    prog.forEach((c, i) => {
+      const n = next(prog, i); if (!(isV(c, key) || cat(c) === 'dom') || mod(c.root - n.root, 12) !== 7) return;
+      // the four dominants that share one diminished seventh (G7, B♭7, D♭7, E7 share B–D–F–A♭): the family
+      const fam = [3, 9].map(k => mk(c.root + k, s === 'gospel' ? '13' : '7'));
+      fam.forEach((f, k) => res.push({ prog: swap(prog, i, Object.assign({}, f, { bass: null })), device: 'Dominant family', reason: `${sym(f, key)} for ${sym(c, key)}: Barry Harris's dominant family — the four dominants built on one diminished seventh (${T.chordToneNames(mk(c.root + 4, 'dim7'), key).map(t => t.name).join('–')}) are interchangeable. ${k === 0 ? 'This one comes in from the back door.' : 'This one resolves up a minor sixth into ' + sym(n, key) + ': the surprise member.'}`, family: 'dominantFamily' }));
+    });
+    return res.slice(0, 2);
+  };
+
+  X.importantMinor = (prog, key, s, d) => {
+    const res = [];
+    prog.forEach((c, i) => {
+      if (!isV(c, key)) return;
+      const im = Object.assign(mk(c.root + 7, 'm6'), { bass: mod(c.root, 12) });
+      res.push({ prog: swap(prog, i, im), device: 'The important minor', reason: `${sym(im, key)} for ${sym(c, key)}: the minor sixth chord on the fifth of the dominant, over the dominant's root — Barry Harris's "important minor". It is ${sym(mk(c.root, '9'), key)} with the 3rd hidden; sweeter, the pull softened but not gone.`, family: 'importantMinor' });
+    });
+    return res.slice(0, 1);
+  };
+
+  X.minorSixthDim = (prog, key, s, d) => {
+    if (key.mode !== 'minor') return [];
+    const res = [];
+    prog.forEach((c, i) => {
+      if (!(rel(c, key) === 0 && cat(c) === 'min') || beats(c) < 4) return;
+      const seq = [mk(c.root, 'm6'), mk(c.root + 2, 'dim7'), inv(mk(c.root, 'm6'), 3), mk(c.root + 5, 'dim7')];
+      res.push({ prog: replaceWith(prog, i, seq), device: 'Minor sixth-diminished', reason: `${syms(seq, key)}: the minor sixth-diminished scale (Barry Harris) over a tonic minor — the chord climbs through its own diminished without ever leaving home. No seventh anywhere; the sixth is the color.`, family: 'minorSixthDim' });
+    });
+    return res.slice(0, 1);
+  };
+
+  X.deceptiveSecondary = (prog, key, s, d) => {
+    if (key.mode !== 'major') return [];
+    const res = [];
+    prog.forEach((c, i) => {
+      if (!isTonic(c, key) || !isIV(next(prog, i), key) || beats(c) < 2) return;
+      const v = mk(key.tonic + 4, s === 'gospel' ? '7s9' : '7');
+      const out = passing(prog, i, v); if (!out) return;
+      res.push({ prog: out, device: 'Deceptive resolution', reason: `${sym(c, key)} – ${sym(v, key)} – ${sym(next(prog, i), key)}: V7/vi, but it resolves up a half step into IV instead of into vi — Berklee's deceptive resolution of a secondary dominant. The ear braces for the minor and gets the open major.`, family: 'deceptiveSecondary' });
+    });
+    return res.slice(0, 1);
+  };
+
+  X.bluesSevenths = (prog, key, s, d) => {
+    if (key.mode !== 'major') return [];
+    const out = clone(prog); let n = 0;
+    out.forEach((c, i) => { if (isTonic(c, key) && cat(c) === 'maj' && isIV(next(prog, i), key)) { out[i] = Object.assign({}, mk(key.tonic, s === 'gospel' ? '9' : '7'), { beats: beats(c), changed: 'mod' }); n++; } else if (isIV(c, key) && cat(c) === 'maj') { out[i] = Object.assign({}, mk(c.root, s === 'gospel' ? '9' : '7'), { beats: beats(c), changed: 'mod' }); n++; } });
+    if (!n) return [];
+    return [{ prog: out, device: 'Dominants without function', reason: `I7 and IV7 as plain color, not as dominants that must resolve: the blues inside the song (Berklee calls them special-function dominants). Earthy, church, Ray Charles.`, family: 'bluesSevenths' }];
+  };
+
+  X.hybridCadence = (prog, key, s, d) => {
+    if (key.mode !== 'major') return [];
+    const res = [];
+    prog.forEach((c, i) => {
+      if (!isV(c, key) || !isTonic(next(prog, i), key)) return;
+      const hyb = Object.assign(mk(key.tonic + 8, 'maj'), { bass: mod(key.tonic + 10, 12) });
+      res.push({ prog: swap(prog, i, hyb), device: 'Hybrid cadence', reason: `${sym(hyb, key)} for ${sym(c, key)}: ♭VI over ♭VII in the bass — a hybrid (Berklee: a triad over a foreign bass) that is really ${sym(mk(key.tonic + 10, '9sus4'), key)} with a ♭9. It lands on I from a whole step below, sus-soft and wide. The R&B and film cadence.`, family: 'hybridCadence' });
+    });
+    return res.slice(0, 1);
+  };
+
+  X.constantThirds = (prog, key, s, d) => {
+    if (key.mode !== 'major') return [];
+    const res = [];
+    prog.forEach((c, i) => {
+      if (!isTonic(c, key) || beats(c) < 4) return;
+      const t = key.tonic; const seq = [mk(t, 'maj7'), mk(t + 3, 'maj7'), mk(t + 6, 'maj7'), mk(t + 9, 'maj7')];
+      res.push({ prog: replaceWith(prog, i, seq), device: 'Constant structure in thirds', reason: `${syms(seq, key)} – ${sym(next(prog, i), key)}: the same maj7 shape rising by minor thirds, a constant structure around the diminished axis. Four keys in one bar and the ear accepts it because the shape never changes.`, family: 'constantThirds' });
+    });
+    return res.slice(0, 1);
+  };
+
+  X.countdown = (prog, key, s, d) => {
+    if (key.mode !== 'major' || prog.length < 2) return [];
+    const res = [];
+    prog.forEach((c, i) => {
+      const n = next(prog, i); const ni = (i + 1) % prog.length;
+      if (!isii(c, key) || !isV(n, key) || beats(c) < 4 || beats(n) < 4 || ni < i) return;
+      const t = key.tonic;
+      const seq = [mk(t + 2, 'm7'), mk(t + 3, '7'), mk(t + 8, 'maj7'), mk(t + 11, '7'), mk(t + 4, 'maj7'), mk(t + 7, '7')];
+      const out = clone(prog); const total = beats(c) + beats(n);
+      out.splice(i, 2, ...seq.map(x => Object.assign({}, x, { beats: total / 6, changed: 'new' })));
+      res.push({ prog: out, device: 'Countdown', reason: `${syms(seq, key)} – ${sym(next(prog, i + 1), key)}: Coltrane's substitution for a ii–V — three tonics a major third apart, each entered by its V7, the last one the real V. The ii–V becomes a wheel (Countdown).`, family: 'countdown' });
+    });
+    return res.slice(0, 1);
+  };
+
+  X.augSixthVariants = (prog, key, s, d) => {
+    const res = [];
+    prog.forEach((c, i) => {
+      if (!isV(next(prog, i), key) || !(isIV(c, key) || isii(c, key))) return;
+      const t = key.tonic;
+      const it = Object.assign(mk(t + 8, 'maj'), { label: 'It⁶', roman: 'It⁶', notes: [8, 0, 6].map(x => mod(t + x, 12)), spell: { [mod(t + 6, 12)]: T.pcName(t + 6, key, 'dim') } });
+      const fr = Object.assign(mk(t + 8, '7b5'), { label: 'Fr⁶', roman: 'Fr⁶', spell: { [mod(t + 6, 12)]: T.pcName(t + 6, key, 'dim') } });
+      res.push({ prog: swap(prog, i, it), device: 'Italian sixth', reason: `${pcn(t + 8, key)}–${pcn(t, key)}–${pcn(t + 6, key, 'dim')} (It⁶) for ${sym(c, key)}: the lean augmented sixth, three notes, the outer voices expanding by half steps onto the V. Mozart's favorite.`, family: 'augSixthVariants' });
+      res.push({ prog: swap(prog, i, fr), device: 'French sixth', reason: `${pcn(t + 8, key)}–${pcn(t, key)}–${pcn(t + 2, key)}–${pcn(t + 6, key, 'dim')} (Fr⁶) for ${sym(c, key)}: the augmented sixth with the 2nd inside — two tritones at once, the most acid of the three. It is the whole-tone sound a century before Debussy.`, family: 'augSixthVariants' });
+    });
+    return res.slice(0, 2);
+  };
+
+  X.quartalVamp = (prog, key, s, d) => {
+    const res = [];
+    prog.forEach((c, i) => {
+      if (cat(c) !== 'min' || beats(c) < 4) return;
+      const seq = [mk(c.root, 'm11'), mk(c.root + 1, 'm11')];
+      res.push({ prog: replaceWith(prog, i, seq, [3, 1]), device: 'So What', reason: `${syms(seq, key)}: quartal m11 shapes sliding up a half step and back — the "So What" voicing (fourths with a third on top). Modal, open, no leading tone anywhere (Miles, Bill Evans, Hancock).`, family: 'quartalVamp' });
+    });
+    return res.slice(0, 1);
+  };
+
+  X.twoStep = (prog, key, s, d) => {
+    if (key.mode !== 'major') return [];
+    const res = [];
+    prog.forEach((c, i) => {
+      if (!isV(c, key) || !isTonic(next(prog, i), key) || beats(c) < 2) return;
+      const seq = [mk(key.tonic + 2, s === 'gospel' ? '13' : '9'), mk(key.tonic + 1, s === 'gospel' ? '13' : '7s11')];
+      res.push({ prog: replaceWith(prog, i, seq), device: 'Two-step into home', reason: `${syms(seq, key)} – ${sym(next(prog, i), key)}: V7/V, then the tritone sub of V — two dominants falling by half step, the bass ${pcn(key.tonic + 2, key)}–${pcn(key.tonic + 1, key)}–${pcn(key.tonic, key)}. The gospel keyboardist's favorite way to arrive.`, family: 'twoStep' });
+    });
+    return res.slice(0, 1);
+  };
+
+  X.canon = (prog, key, s, d) => {
+    if (key.mode !== 'major' || !isTonic(prog[0], key)) return [];
+    const total = prog.reduce((a, c) => a + beats(c), 0); if (total < 8) return [];
+    const t = key.tonic; const b = total / 8;
+    const degs = [[0, 'maj'], [7, 'maj'], [9, 'min'], [4, 'min'], [5, 'maj'], [0, 'maj'], [5, 'maj'], [7, 'maj']];
+    const seq = degs.map(([r, q]) => Object.assign(mk(t + r, q), { beats: b, changed: 'new' }));
+    return [{ prog: seq, device: 'Descending thirds', reason: `${syms(seq, key)}: I–V–vi–iii–IV–I–IV–V, the Romanesca — roots falling by thirds in pairs. Pachelbel's canon, and half of pop since (the descending-thirds sequence in every harmony textbook).`, family: 'canon' }];
+  };
+
+  X.dominantPedal = (prog, key, s, d) => {
+    if (prog.length < 2) return [];
+    const out = clone(prog); let n = 0; const dom = mod(key.tonic + 7, 12);
+    out.forEach((c, i) => { if (i === prog.length - 1 && isTonic(c, key)) return; if (c.bass != null) return; const pcs = T.chordPcs(c); if (pcs.includes(dom) || isTonic(c, key) || rel(c, key) === 5 || rel(c, key) === 2) { out[i] = Object.assign({}, c, { bass: dom, changed: 'mod' }); n++; } });
+    if (n < 2) return [];
+    return [{ prog: out, device: 'Dominant pedal', reason: `Everything over ${pcn(dom, key)}, the dominant, in the bass: a dominant pedal. The harmony moves above a bass that refuses to resolve — tension that builds for a whole phrase and then releases at once (Berklee's pedal point; every film score's last bar before the chorus).`, family: 'dominantPedal' }];
+  };
+
+  X.modalCast = (prog, key, s, d) => {
+    const res = []; const major = key.mode === 'major'; const t = key.tonic;
+    if (major) {
+      // Mixolydian: V → ♭VII, iii → v, vii° → ♭VII; Lydian: IV → II, ii → II
+      const mixo = clone(prog); let n1 = 0;
+      mixo.forEach((c, i) => { const r = rel(c, key); if (r === 7 && (cat(c) === 'maj' || cat(c) === 'dom')) { mixo[i] = Object.assign({}, mk(t + 10, 'maj'), { beats: beats(c), changed: 'mod' }); n1++; } else if (r === 4 && cat(c) === 'min') { mixo[i] = Object.assign({}, mk(t + 7, 'min'), { beats: beats(c), changed: 'mod' }); n1++; } });
+      if (n1) res.push({ prog: mixo, device: 'Cast in Mixolydian', reason: `The whole phrase in Mixolydian: no leading tone, the V becomes ♭VII, the iii becomes a minor v. Modal harmony (Berklee H4): the chords stop pointing home and start describing a place. Rock, folk, gospel-blues.`, family: 'modalCast' });
+      const lyd = clone(prog); let n2 = 0;
+      lyd.forEach((c, i) => { const r = rel(c, key); if ((r === 5 && cat(c) === 'maj') || (r === 2 && cat(c) === 'min')) { lyd[i] = Object.assign({}, mk(t + 2, s === 'film' ? 'maj' : 'maj7'), { beats: beats(c), changed: 'mod' }); n2++; } });
+      if (n2) res.push({ prog: lyd, device: 'Cast in Lydian', reason: `The whole phrase in Lydian: the raised 4th turns IV and ii into a major II. Weightless, bright, a little unreal — the mode of wonder (film, Björk, Jacob Collier).`, family: 'modalCast' });
+    } else {
+      const dor = clone(prog); let n3 = 0;
+      dor.forEach((c, i) => { const r = rel(c, key); if (r === 5 && cat(c) === 'min') { dor[i] = Object.assign({}, mk(t + 5, s === 'classical' ? 'maj' : '7'), { beats: beats(c), changed: 'mod' }); n3++; } else if (r === 8 && cat(c) === 'maj') { dor[i] = Object.assign({}, mk(t + 9, 'm7b5'), { beats: beats(c), changed: 'mod' }); n3++; } });
+      if (n3) res.push({ prog: dor, device: 'Cast in Dorian', reason: `The whole phrase in Dorian: the raised 6th makes the iv a major IV (or IV7) and turns ♭VI into a half-diminished vi. Minor that smiles — Santana, Badu, every neo-soul vamp.`, family: 'modalCast' });
+    }
+    return res.slice(0, 2);
+  };
+
   // ---------- Shadow (negative harmony) ----------
   function shadow(prog, key) {
     const out = prog.map(c => { const n = T.negative(c, key); return Object.assign({}, c, n || {}, { changed: 'mod' }); });
@@ -2073,7 +2265,8 @@ const Reharm = (() => {
       o.roman = o.prog.map(c => c.roman || T.romanNumeral(c, key));
       o.clashes = o.prog.filter(c => c.changed && !fitsMelody(c)).map(c => sym(c, key));
       let score = o.weight * (1 + 0.35 * (o.depth / depth)); // deeper (within the ask) ranks a little higher
-      if (opts.mood) score += 1.6 * M.moodMatch(o.mood.focus || o.mood, opts.mood);
+      if (opts.mood) score += 1.6 * (M.gemsById(String(opts.mood).split(':')[0]) ? M.gemsMatch(o.mood.focus || o.mood, opts.mood, o.family) : M.moodMatch(o.mood.focus || o.mood, opts.mood));
+      o.gems = M.gemsOf(o.mood.focus || o.mood, o.family);
       if (o.clashes.length) score -= 2.5 * o.clashes.length;
       o.score = score;
     });
@@ -2085,7 +2278,7 @@ const Reharm = (() => {
     // whole-phrase rewrites: chain two or three compatible moves, then recolor in the style, so the writer can
     // hear the whole lens at once and not only one chord at a time
     if (opts.compose !== false && depth >= 2 && all.length >= 2) {
-      const skip = new Set(['recolor', 'slashBass', 'pedal', 'sus', 'sequenceFifths', 'coltrane']);
+      const skip = new Set(['recolor', 'slashBass', 'pedal', 'sus', 'sequenceFifths', 'coltrane', 'canon', 'modalCast', 'dominantPedal', 'bluesSevenths']);
       const build = (firstFamily) => {
         let base = prog.map(c => Object.assign({}, c, { changed: undefined })); const chain = []; const used = new Set();
         let kept = []; // chords earlier steps introduced; a later step may not undo them
@@ -2103,7 +2296,7 @@ const Reharm = (() => {
         base = base.map(c => { const o = Object.assign({}, c); delete o.lock; return o; });
         base = base.map(c => Object.assign({}, c, { changed: prog.some(o => T.sameChord(o, c)) ? undefined : 'mod' }));
         const o = { prog: base, device: 'Whole phrase: ' + chain.map(c => c.device.toLowerCase()).join(' + '), reason: chain.map(c => c.reason.split(/(?<=\.)\s/)[0]).join(' ') , family: 'compose', depth, weight: 0, style, score: -1 };
-        o.mood = M.progressionMood(o.prog, key, style); o.roman = o.prog.map(c => c.roman || T.romanNumeral(c, key));
+        o.mood = M.progressionMood(o.prog, key, style); o.roman = o.prog.map(c => c.roman || T.romanNumeral(c, key)); o.gems = M.gemsOf(o.mood.focus || o.mood, chain[0].family); o.clashes = [];
         return o;
       };
       const seen2 = new Set(picked.map(o => sig(o.prog)));
@@ -2545,7 +2738,7 @@ const Audio = (() => {
     if (PIANO.base) {
       try { const r = await fetch(PIANO.base + 'index.json', { cache: 'force-cache' }); if (r.ok) { PIANO.meta = await r.json(); PIANO.notes = Object.keys(PIANO.meta).map(Number).sort((a, b) => a - b); PIANO.source = 'hosted'; PIANO.ready = true; return 'hosted'; } } catch (e) { /* fall through */ }
     }
-    if (PIANO.embedded) { PIANO.meta = {}; for (const k of Object.keys(PIANO.embedded)) PIANO.meta[k] = { tune: PIANO.embedded[k].tune, layers: { '10': k } }; PIANO.notes = Object.keys(PIANO.meta).map(Number).sort((a, b) => a - b); PIANO.source = 'embedded'; PIANO.ready = true; return 'embedded'; }
+    if (PIANO.embedded) { PIANO.meta = {}; for (const k of Object.keys(PIANO.embedded)) { const e = PIANO.embedded[k]; PIANO.meta[k] = { tune: e.tune, layers: e.layers ? Object.fromEntries(Object.keys(e.layers).map(l => [l, k])) : { '10': k } }; } PIANO.notes = Object.keys(PIANO.meta).map(Number).sort((a, b) => a - b); PIANO.source = 'embedded'; PIANO.ready = true; return 'embedded'; }
     PIANO.failed = true; PIANO.source = 'synth'; return 'synth';
   }
   const nearestSample = (midi) => { let best = PIANO.notes[0]; for (const n of PIANO.notes) if (Math.abs(n - midi) < Math.abs(best - midi)) best = n; return best; };
@@ -2553,33 +2746,47 @@ const Audio = (() => {
     const key = sampleMidi + ':' + layer; if (PIANO.cache.has(key)) return PIANO.cache.get(key);
     const p = (async () => {
       let ab;
-      if (PIANO.source === 'embedded') { const b64 = PIANO.embedded[String(sampleMidi)].b64; const bin = atob(b64); ab = new ArrayBuffer(bin.length); const u = new Uint8Array(ab); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); }
+      if (PIANO.source === 'embedded') { const e = PIANO.embedded[String(sampleMidi)]; const b64 = e.layers ? (e.layers[layer] || e.layers['10'] || Object.values(e.layers)[0]) : e.b64; const bin = atob(b64); ab = new ArrayBuffer(bin.length); const u = new Uint8Array(ab); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); }
       else { const r = await fetch(PIANO.base + PIANO.meta[sampleMidi].layers[layer]); ab = await r.arrayBuffer(); }
       return await new Promise((res, rej) => ctx.decodeAudioData(ab, res, rej));
     })();
     PIANO.cache.set(key, p); p.catch(() => PIANO.cache.delete(key)); return p;
   }
-  function layerFor(vel) { if (PIANO.source !== 'hosted') return '10'; return vel < 0.4 ? '06' : vel < 0.75 ? '10' : '14'; }
+  const layersAvailable = () => (PIANO.meta && PIANO.notes.length) ? Object.keys(PIANO.meta[PIANO.notes[0]].layers).sort() : ['10'];
+  // Velocity → the two nearest dynamic layers and a crossfade between them (the sampled timbre changes with force,
+  // not only the loudness, so a mid-velocity note mixes the soft and the loud recording).
+  function layerMix(vel) {
+    const ls = layersAvailable(); const pos = { '06': 0.3, '10': 0.62, '14': 0.9 };
+    if (ls.length === 1) return [[ls[0], 1]];
+    const pts = ls.map(l => [l, pos[l] ?? 0.6]).sort((a, b) => a[1] - b[1]);
+    if (vel <= pts[0][1]) return [[pts[0][0], 1]]; if (vel >= pts[pts.length - 1][1]) return [[pts[pts.length - 1][0], 1]];
+    for (let i = 0; i < pts.length - 1; i++) if (vel >= pts[i][1] && vel <= pts[i + 1][1]) { const f = (vel - pts[i][1]) / (pts[i + 1][1] - pts[i][1]); return [[pts[i][0], Math.cos(f * Math.PI / 2)], [pts[i + 1][0], Math.sin(f * Math.PI / 2)]]; }
+    return [[pts[0][0], 1]];
+  }
   async function pianoPreload(lo = 36, hi = 84) {
     ensureCtx(); if (!PIANO.ready) return false;
     const need = new Set(); for (let m = lo; m <= hi; m++) need.add(nearestSample(m));
-    await Promise.all([...need].map(n => pianoBuffer(n, '10').catch(() => null)));
+    const ls = layersAvailable();
+    await Promise.all([...need].flatMap(n => ls.map(l => pianoBuffer(n, l).catch(() => null))));
     return true;
   }
+  const MAX_VOICES = 128;
+  function stealIfNeeded() { if (VOICES.size < MAX_VOICES) return; const oldest = VOICES.values().next().value; if (oldest) { try { const now = ctx.currentTime; oldest.g.gain.cancelScheduledValues(now); oldest.g.gain.setValueAtTime(oldest.g.gain.value, now); oldest.g.gain.linearRampToValueAtTime(0.0001, now + 0.03); oldest.srcs.forEach(x => { try { x.stop(now + 0.04); } catch (e) {} }); } catch (e) {} VOICES.delete(oldest); } }
   // Play one note: vel 0..1, dur seconds held, when = ctx time
   function playTone(midi, dur, when, vel = 0.6) {
     ensureCtx(); const t0 = when || ctx.currentTime;
     if (SOUND.tone === 'ep') return epTone(midi, dur, t0, vel);
     if (!PIANO.ready || PIANO.failed) return synthTone(midi, dur, t0, vel);
-    const sm = nearestSample(midi), layer = layerFor(vel);
-    const cached = PIANO.cache.get(sm + ':' + layer);
-    if (!cached) { pianoBuffer(sm, layer).catch(() => {}); return synthTone(midi, dur, t0, vel); }
-    cached.then(buf => {
-      const src = ctx.createBufferSource(); src.buffer = buf;
-      src.playbackRate.value = Math.pow(2, (midi - sm) / 12 + ((PIANO.meta[sm] && PIANO.meta[sm].tune) || 0) / 1200);
-      const g = ctx.createGain(); const peak = PIANO.source === 'hosted' ? 0.9 : 0.35 + 0.6 * vel;
+    const sm = nearestSample(midi);
+    const mix = layerMix(vel);
+    const bufs = mix.map(([l]) => PIANO.cache.get(sm + ':' + l));
+    if (bufs.some(b => !b)) { mix.forEach(([l]) => pianoBuffer(sm, l).catch(() => {})); return synthTone(midi, dur, t0, vel); }
+    Promise.all(bufs).then(decoded => {
+      stealIfNeeded();
+      const g = ctx.createGain(); const peak = 0.55 + 0.45 * vel;
       g.gain.setValueAtTime(peak, t0); g.gain.setValueAtTime(peak, t0 + dur); g.gain.exponentialRampToValueAtTime(0.001, t0 + dur + 0.45);
-      src.connect(g).connect(master); src.start(Math.max(t0, ctx.currentTime)); src.stop(t0 + dur + 0.5); track(g, [src], t0 + dur + 0.5);
+      const srcs = decoded.map((buf, i) => { const src = ctx.createBufferSource(); src.buffer = buf; src.playbackRate.value = Math.pow(2, (midi - sm) / 12 + ((PIANO.meta[sm] && PIANO.meta[sm].tune) || 0) / 1200); const lg = ctx.createGain(); lg.gain.value = mix[i][1]; src.connect(lg).connect(g); src.start(Math.max(t0, ctx.currentTime)); src.stop(t0 + dur + 0.5); return src; });
+      g.connect(master); track(g, srcs, t0 + dur + 0.5);
     }).catch(() => synthTone(midi, dur, t0, vel));
   }
   // Electric piano: two-operator FM (a tine over a warm fundamental), a quick hammer click, a slow tremolo.
@@ -2625,6 +2832,15 @@ const Audio = (() => {
   }
   function setTone(t) { SOUND.tone = t === 'ep' ? 'ep' : 'grand'; }
 
+  // Play a recorded take exactly: notes with absolute ms times and durations and velocities 0..127
+  function playTake(notes, opts = {}) {
+    stop(true); ensureCtx(); unmuteIOS();
+    const token = ++PLAYER.token; PLAYER.playing = true;
+    const start = ctx.currentTime + 0.1; const first = notes.length ? Math.min(...notes.map(n => n.at)) : 0; let end = start;
+    for (const n of notes) { const at = start + (n.at - first) / 1000; const dur = Math.max(0.08, n.dur / 1000); playTone(n.n, dur, at, Math.min(1, 0.2 + n.v / 127 * 0.8)); end = Math.max(end, at + dur); }
+    if (opts.onNote) notes.forEach(n => { const ms = Math.max(0, (start + (n.at - first) / 1000 - ctx.currentTime) * 1000); setTimeout(() => { if (PLAYER.token === token) opts.onNote(n); }, ms); });
+    PLAYER.timer = setTimeout(() => { if (PLAYER.token === token) { PLAYER.playing = false; if (opts.onEnd) opts.onEnd(); } }, (end - ctx.currentTime) * 1000 + 300);
+  }
   // ---------- Progression player ----------
   // items: [{notes: [midi], beats}] ; opts: {bpm, feel: 'hold'|'groove', loop, onChord(i), onEnd()}
   const PLAYER = { timer: null, playing: false, stopAt: 0, token: 0 };
@@ -2851,7 +3067,7 @@ const Audio = (() => {
     MIC.stream = null;
   }
 
-  return { ensureCtx, unmuteIOS, setTone, SOUND, takeStart, takeNotes, get ctx() { return ctx; }, pianoInit, pianoPreload, playTone, playNotes, play, stop, PLAYER, PIANO, midiStart, midiStop, MIDI, micStart, micStop, MIC, matchChroma };
+  return { ensureCtx, unmuteIOS, setTone, SOUND, takeStart, takeNotes, playTake, get ctx() { return ctx; }, pianoInit, pianoPreload, playTone, playNotes, play, stop, PLAYER, PIANO, midiStart, midiStop, MIDI, micStart, micStop, MIC, matchChroma };
 })();
 if (typeof module !== 'undefined') module.exports = Audio;
 
@@ -3000,6 +3216,20 @@ const Export = (() => {
     slideMinorThird: 'Slide any m9 shape up a minor third and back; then by a tritone.',
     loopTwoFive: 'Loop ii9 to V13sus4 and write a melody that lives on the 9ths.',
     preacher: 'Diminished chords on every half step between I and IV, ascending, with the bass walking; then descending.',
+    dominantFamily: 'Take G7: play B♭7, D♭7 and E7 in its place, each resolving to C; then do it from every dominant in a tune.',
+    importantMinor: 'Over every V7 in a song play the m6 on its fifth (Dm6 over G); then the m6 on its root (Gm6) and hear the difference.',
+    minorSixthDim: 'The minor sixth-diminished scale as chords, up and down, in all keys; then alternate it with the major version.',
+    deceptiveSecondary: 'Play V7/vi to vi, then V7/vi to IV, then V7/vi to IVm; the second is the one for a chorus.',
+    bluesSevenths: 'Play a 12-bar blues with every chord a 7th or 9th; then put one of those sevenths inside a ballad.',
+    hybridCadence: 'A♭/B♭ to C in every key; then try the same hybrid two half steps lower.',
+    constantThirds: 'maj7 shapes rising by minor thirds, then by major thirds, then by fourths; keep the top note stepping.',
+    countdown: 'Countdown over every ii–V you know, slowly; the trick is the three maj7 chords, not the dominants.',
+    augSixthVariants: 'Italian, French, German sixths in a row, each resolving to the cadential 6/4; name the outer voices.',
+    quartalVamp: 'Stack fourths on every scale degree of Dorian; slide any voicing up a half step and back.',
+    twoStep: 'D9 to D♭7 to C in all keys; then start the two-step from the tritone sub of V/V instead.',
+    canon: 'The Romanesca in all keys with the bass walking; then the same roots with 7ths and inversions.',
+    dominantPedal: 'Hold the dominant in the bass through four chords; release it only on the last downbeat.',
+    modalCast: 'Rewrite a phrase you know in Mixolydian, then Lydian, then Dorian; sing the one note that changes each time.',
     shadow: 'Play the progression and its mirror back to back; find which chord stayed the same and why.',
     compose: 'Play the whole phrase slowly, one hand at a time; then take out one move and see if you miss it.',
   };
@@ -3081,7 +3311,7 @@ if (typeof module !== 'undefined') module.exports = Sync;
   const T = Theory, M = Mood, R = Reharm, V = Voicing, A = Audio;
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  const BUILD = '2610191709';
+  const BUILD = '2610191948';
 
   // ---------- state ----------
   const DEFAULTS = { symbols: 'plain', twoHands: false, span: 'default', sound: true, tone: 'grand', feel: 'hold', bpm: 76, look: 'night', fingers: false, instrument: 'piano', styles: ['neosoul', 'gospel'] };
@@ -3171,6 +3401,14 @@ if (typeof module !== 'undefined') module.exports = Sync;
     if (!S.settings.sound) { toast('Sound is off in settings'); return; }
     unlockAudio();
     if (A.PLAYER.playing) { A.stop(); if (playingCleanup) playingCleanup(); return; }
+    // the take itself, note for note, when nothing in the progression was changed
+    if (S.settings.feel === 'asPlayed' && S.take && S.take.notes && S.take.notes.length && prog === S.prog && !prog.some(c => c.changed) && prog.some(c => c.span)) {
+      const chips = container ? [...container.querySelectorAll('.chip')] : [];
+      const clear = () => chips.forEach(ch => ch.classList.remove('playing'));
+      playingCleanup = () => { clear(); playingCleanup = null; updatePlayButtons(false); }; updatePlayButtons(true);
+      A.playTake(S.take.notes, { onNote: (n) => { const i = prog.findIndex(c => c.span && n.at >= c.span.start - 30 && n.at < c.span.end); if (i >= 0 && chips[i] && !chips[i].classList.contains('playing')) { clear(); chips[i].classList.add('playing'); } }, onEnd: () => { if (playingCleanup) playingCleanup(); } });
+      return;
+    }
     const chips = container ? [...container.querySelectorAll('.chip')] : [];
     const clear = () => chips.forEach(ch => ch.classList.remove('playing'));
     playingCleanup = () => { clear(); playingCleanup = null; updatePlayButtons(false); };
@@ -3281,7 +3519,7 @@ if (typeof module !== 'undefined') module.exports = Sync;
         $('midiHint').textContent = st.inputs.length ? 'Hold a chord; lift and play the next. Pedal down keeps the chord.' : 'Connect a USB or Bluetooth keyboard. It appears here automatically.';
       },
       onLive: (c, notes) => { const el = $('midiLive'); if (!c) { el.textContent = '—'; $('midiSub').textContent = 'listening'; return; } el.innerHTML = chordInner(c); el.style.color = M.css(moodOf(c, S.key), 8); $('midiSub').textContent = c.melody && c.melody.length ? 'melody: ' + c.melody.map(m => T.pcName(m.note % 12, S.key)).join(' ') : notes.map(n => T.pcName(n % 12, S.key)).join(' '); },
-      onChord: (c, ms) => { addChord(Object.assign({}, c, { beats: 4, ms, src: 'midi' })); },
+      onChord: (c, ms) => { addChord(Object.assign({}, c, { beats: 4, ms, src: 'midi' })); const notes = A.takeNotes(); if (notes.length) S.take = { notes, at: Date.now() }; },
     });
     if (ok) $('midiLbl').textContent = 'Reading';
   }
@@ -3339,7 +3577,7 @@ if (typeof module !== 'undefined') module.exports = Sync;
   function finishMidiTake() {
     if (A.MIDI.current) { const cur = A.MIDI.current; cur.chord.span = { start: A.MIDI.currentSince - A.MIDI.take.t0, end: performance.now() - A.MIDI.take.t0 }; addChord(Object.assign({}, cur.chord, { beats: 4, ms: performance.now() - A.MIDI.currentSince, src: 'midi' })); A.MIDI.current = null; }
     const notes = A.takeNotes();
-    if (notes.length) S.take = { notes, at: Date.now() };
+    if (notes.length) { S.take = { notes, at: Date.now() }; S.settings.feel = 'asPlayed'; }
     finalizeDurations(); updateHeardTitle(); renderHeard();
     $('midiLive').textContent = '—'; $('midiSub').textContent = `take kept: ${notes.length} notes`;
     A.takeStart();
@@ -3399,10 +3637,24 @@ if (typeof module !== 'undefined') module.exports = Sync;
     $('depthDots').innerHTML = Array.from({ length: 5 }, (_, i) => `<i class="${i < S.depth ? 'on' : ''} ${i >= cap ? 'cap' : ''}"></i>`).join('');
     $('depthDown').disabled = S.depth <= 1; $('depthUp').disabled = S.depth >= cap;
     $('styleBlurb').textContent = `${R.STYLES[S.style].name} goes to ${cap}`;
-    $('moodChips').innerHTML = MOODS.map(([id, name]) => `<button class="small ${(S.mood || '') === id ? 'on' : ''}" data-mood="${id}">${name}</button>`).join('');
-    $('moodChips').querySelectorAll('button').forEach(b => b.addEventListener('click', () => { S.mood = b.dataset.mood || null; recompute(); }));
+    renderWheel();
     $('dareBtn').classList.toggle('on', S.dare);
     $('shadowBtn').classList.toggle('on', !!S.shadow);
+  }
+  // The emotion wheel (GEMS): nine segments, a term row for the chosen one
+  function renderWheel() {
+    const host = $('moodChips'); const cur = S.mood ? String(S.mood).split(':') : [null, null];
+    const W = 240, cx = 120, cy = 120, r0 = 48, r1 = 112; const n = M.GEMS.length;
+    const seg = (i) => { const a0 = (i / n) * Math.PI * 2 - Math.PI / 2 + 0.02, a1 = ((i + 1) / n) * Math.PI * 2 - Math.PI / 2 - 0.02; const p = (r, a) => `${(cx + r * Math.cos(a)).toFixed(1)} ${(cy + r * Math.sin(a)).toFixed(1)}`; return `M ${p(r0, a0)} A ${r0} ${r0} 0 0 1 ${p(r0, a1)} L ${p(r1, a1)} A ${r1} ${r1} 0 0 0 ${p(r1, a0)} Z`; };
+    const mid = (i) => { const a = ((i + 0.5) / n) * Math.PI * 2 - Math.PI / 2; return [cx + 80 * Math.cos(a), cy + 80 * Math.sin(a)]; };
+    let svg = `<svg class="wheel" viewBox="0 0 ${W} ${W}" role="group" aria-label="Emotion wheel">`;
+    M.GEMS.forEach((g, i) => { const on = cur[0] === g.id; const [mx, my] = mid(i); svg += `<path d="${seg(i)}" data-g="${g.id}" fill="hsl(${g.hue} ${on ? 62 : 38}% calc(${on ? 48 : 34}% + var(--lshift) * 0.6))" stroke="${on ? 'var(--accent)' : 'var(--bg)'}" stroke-width="${on ? 2.5 : 2}" style="cursor:pointer"><title>${esc(g.name)}</title></path><text x="${mx.toFixed(1)}" y="${(my + 4).toFixed(1)}" text-anchor="middle" font-size="${g.name.length > 9 ? 8.5 : 10}" font-family="var(--body)" font-weight="600" fill="#fff" fill-opacity="${on ? 1 : .85}" style="pointer-events:none">${esc(g.name.split(' ')[0])}</text>`; });
+    const g = cur[0] ? M.gemsById(cur[0]) : null;
+    svg += `<circle cx="${cx}" cy="${cy}" r="${r0 - 4}" fill="var(--panel2)" stroke="var(--line)" data-g="" style="cursor:pointer"/><text x="${cx}" y="${cy - 2}" text-anchor="middle" font-size="10.5" font-family="var(--body)" font-weight="600" fill="var(--fg)" style="pointer-events:none">${g ? esc(g.name.split(' ')[0]) : 'Any'}</text><text x="${cx}" y="${cy + 11}" text-anchor="middle" font-size="8.5" font-family="var(--body)" fill="var(--muted)" style="pointer-events:none">${g ? esc(cur[1] || g.sup) : 'feeling'}</text></svg>`;
+    const terms = g ? `<div class="chips" style="align-content:flex-start">${Object.keys(g.terms).map(t => `<button class="small ${cur[1] === t ? 'on' : ''}" data-term="${esc(t)}">${esc(t)}</button>`).join('')}<button class="small ghost" data-term="">any ${esc(g.name.toLowerCase())}</button></div><div class="hint">${esc(g.name)} is one of the nine emotions music is measured to evoke (Geneva Emotional Music Scale). Pick a shade to narrow it.</div>` : `<div class="hint">Tap a feeling. Options are then ranked by how close they sit to it on the brightness–tension map, by their color words, and by which devices usually carry that feeling. From the Geneva Emotional Music Scale; the app says "feels like", never "is".</div>`;
+    host.innerHTML = `<div class="wheelwrap">${svg}<div class="wheelside">${terms}</div></div>`;
+    host.querySelectorAll('[data-g]').forEach(p => p.addEventListener('click', () => { const id = p.dataset.g; S.mood = id ? id : null; S.openCard = -1; recompute(); }));
+    host.querySelectorAll('[data-term]').forEach(b => b.addEventListener('click', () => { const t = b.dataset.term; S.mood = t ? `${cur[0]}:${t}` : cur[0]; S.openCard = -1; recompute(); }));
   }
   $('depthDown').addEventListener('click', () => { S.depth = Math.max(1, S.depth - 1); S.openCard = -1; recompute(); save(); });
   $('depthUp').addEventListener('click', () => { S.depth = Math.min(R.STYLES[S.style].ceiling, S.depth + 1); S.openCard = -1; recompute(); save(); });
@@ -3442,7 +3694,7 @@ if (typeof module !== 'undefined') module.exports = Sync;
     const depthDots = Array.from({ length: 5 }, (_, i) => `<i class="${i < (o.depth || 1) ? 'on' : ''}"></i>`).join('');
     const words = (o.mood.focus && o.mood.focus.words.length ? o.mood.focus.words : o.mood.words).slice(0, 2);
     return `<div class="card ${S.openCard === idx ? 'open' : ''}" data-card="${idx}">
-      <div class="head"><span class="device">${esc(o.device)}</span><span class="ddots" title="depth ${o.depth}">${depthDots}</span><span class="spacer"></span><span class="words"><b>${esc(words[0] || '')}</b>${words[1] ? ', ' + esc(words[1]) : ''}</span></div>
+      <div class="head"><span class="device">${esc(o.device)}</span><span class="ddots" title="depth ${o.depth}">${depthDots}</span><span class="spacer"></span><span class="words">${o.gems ? `<span class="gem" style="--gh:${o.gems.hue}">${esc(o.gems.name.split(' ')[0])}</span> ` : ''}<b>${esc(words[0] || '')}</b>${words[1] ? ', ' + esc(words[1]) : ''}</span></div>
       <div class="moodbar" style="--g:${gradientOf(o.prog, S.key)}"></div>
       <div class="chips scroll">${o.prog.map((c, i) => chipHTML(c, S.key, { i, prog: o.prog })).join('')}</div>
       <div class="rn">${esc(o.roman.join(' – '))}</div>

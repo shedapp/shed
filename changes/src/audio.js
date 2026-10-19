@@ -54,7 +54,7 @@ const Audio = (() => {
     if (PIANO.base) {
       try { const r = await fetch(PIANO.base + 'index.json', { cache: 'force-cache' }); if (r.ok) { PIANO.meta = await r.json(); PIANO.notes = Object.keys(PIANO.meta).map(Number).sort((a, b) => a - b); PIANO.source = 'hosted'; PIANO.ready = true; return 'hosted'; } } catch (e) { /* fall through */ }
     }
-    if (PIANO.embedded) { PIANO.meta = {}; for (const k of Object.keys(PIANO.embedded)) PIANO.meta[k] = { tune: PIANO.embedded[k].tune, layers: { '10': k } }; PIANO.notes = Object.keys(PIANO.meta).map(Number).sort((a, b) => a - b); PIANO.source = 'embedded'; PIANO.ready = true; return 'embedded'; }
+    if (PIANO.embedded) { PIANO.meta = {}; for (const k of Object.keys(PIANO.embedded)) { const e = PIANO.embedded[k]; PIANO.meta[k] = { tune: e.tune, layers: e.layers ? Object.fromEntries(Object.keys(e.layers).map(l => [l, k])) : { '10': k } }; } PIANO.notes = Object.keys(PIANO.meta).map(Number).sort((a, b) => a - b); PIANO.source = 'embedded'; PIANO.ready = true; return 'embedded'; }
     PIANO.failed = true; PIANO.source = 'synth'; return 'synth';
   }
   const nearestSample = (midi) => { let best = PIANO.notes[0]; for (const n of PIANO.notes) if (Math.abs(n - midi) < Math.abs(best - midi)) best = n; return best; };
@@ -62,33 +62,47 @@ const Audio = (() => {
     const key = sampleMidi + ':' + layer; if (PIANO.cache.has(key)) return PIANO.cache.get(key);
     const p = (async () => {
       let ab;
-      if (PIANO.source === 'embedded') { const b64 = PIANO.embedded[String(sampleMidi)].b64; const bin = atob(b64); ab = new ArrayBuffer(bin.length); const u = new Uint8Array(ab); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); }
+      if (PIANO.source === 'embedded') { const e = PIANO.embedded[String(sampleMidi)]; const b64 = e.layers ? (e.layers[layer] || e.layers['10'] || Object.values(e.layers)[0]) : e.b64; const bin = atob(b64); ab = new ArrayBuffer(bin.length); const u = new Uint8Array(ab); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); }
       else { const r = await fetch(PIANO.base + PIANO.meta[sampleMidi].layers[layer]); ab = await r.arrayBuffer(); }
       return await new Promise((res, rej) => ctx.decodeAudioData(ab, res, rej));
     })();
     PIANO.cache.set(key, p); p.catch(() => PIANO.cache.delete(key)); return p;
   }
-  function layerFor(vel) { if (PIANO.source !== 'hosted') return '10'; return vel < 0.4 ? '06' : vel < 0.75 ? '10' : '14'; }
+  const layersAvailable = () => (PIANO.meta && PIANO.notes.length) ? Object.keys(PIANO.meta[PIANO.notes[0]].layers).sort() : ['10'];
+  // Velocity → the two nearest dynamic layers and a crossfade between them (the sampled timbre changes with force,
+  // not only the loudness, so a mid-velocity note mixes the soft and the loud recording).
+  function layerMix(vel) {
+    const ls = layersAvailable(); const pos = { '06': 0.3, '10': 0.62, '14': 0.9 };
+    if (ls.length === 1) return [[ls[0], 1]];
+    const pts = ls.map(l => [l, pos[l] ?? 0.6]).sort((a, b) => a[1] - b[1]);
+    if (vel <= pts[0][1]) return [[pts[0][0], 1]]; if (vel >= pts[pts.length - 1][1]) return [[pts[pts.length - 1][0], 1]];
+    for (let i = 0; i < pts.length - 1; i++) if (vel >= pts[i][1] && vel <= pts[i + 1][1]) { const f = (vel - pts[i][1]) / (pts[i + 1][1] - pts[i][1]); return [[pts[i][0], Math.cos(f * Math.PI / 2)], [pts[i + 1][0], Math.sin(f * Math.PI / 2)]]; }
+    return [[pts[0][0], 1]];
+  }
   async function pianoPreload(lo = 36, hi = 84) {
     ensureCtx(); if (!PIANO.ready) return false;
     const need = new Set(); for (let m = lo; m <= hi; m++) need.add(nearestSample(m));
-    await Promise.all([...need].map(n => pianoBuffer(n, '10').catch(() => null)));
+    const ls = layersAvailable();
+    await Promise.all([...need].flatMap(n => ls.map(l => pianoBuffer(n, l).catch(() => null))));
     return true;
   }
+  const MAX_VOICES = 128;
+  function stealIfNeeded() { if (VOICES.size < MAX_VOICES) return; const oldest = VOICES.values().next().value; if (oldest) { try { const now = ctx.currentTime; oldest.g.gain.cancelScheduledValues(now); oldest.g.gain.setValueAtTime(oldest.g.gain.value, now); oldest.g.gain.linearRampToValueAtTime(0.0001, now + 0.03); oldest.srcs.forEach(x => { try { x.stop(now + 0.04); } catch (e) {} }); } catch (e) {} VOICES.delete(oldest); } }
   // Play one note: vel 0..1, dur seconds held, when = ctx time
   function playTone(midi, dur, when, vel = 0.6) {
     ensureCtx(); const t0 = when || ctx.currentTime;
     if (SOUND.tone === 'ep') return epTone(midi, dur, t0, vel);
     if (!PIANO.ready || PIANO.failed) return synthTone(midi, dur, t0, vel);
-    const sm = nearestSample(midi), layer = layerFor(vel);
-    const cached = PIANO.cache.get(sm + ':' + layer);
-    if (!cached) { pianoBuffer(sm, layer).catch(() => {}); return synthTone(midi, dur, t0, vel); }
-    cached.then(buf => {
-      const src = ctx.createBufferSource(); src.buffer = buf;
-      src.playbackRate.value = Math.pow(2, (midi - sm) / 12 + ((PIANO.meta[sm] && PIANO.meta[sm].tune) || 0) / 1200);
-      const g = ctx.createGain(); const peak = PIANO.source === 'hosted' ? 0.9 : 0.35 + 0.6 * vel;
+    const sm = nearestSample(midi);
+    const mix = layerMix(vel);
+    const bufs = mix.map(([l]) => PIANO.cache.get(sm + ':' + l));
+    if (bufs.some(b => !b)) { mix.forEach(([l]) => pianoBuffer(sm, l).catch(() => {})); return synthTone(midi, dur, t0, vel); }
+    Promise.all(bufs).then(decoded => {
+      stealIfNeeded();
+      const g = ctx.createGain(); const peak = 0.55 + 0.45 * vel;
       g.gain.setValueAtTime(peak, t0); g.gain.setValueAtTime(peak, t0 + dur); g.gain.exponentialRampToValueAtTime(0.001, t0 + dur + 0.45);
-      src.connect(g).connect(master); src.start(Math.max(t0, ctx.currentTime)); src.stop(t0 + dur + 0.5); track(g, [src], t0 + dur + 0.5);
+      const srcs = decoded.map((buf, i) => { const src = ctx.createBufferSource(); src.buffer = buf; src.playbackRate.value = Math.pow(2, (midi - sm) / 12 + ((PIANO.meta[sm] && PIANO.meta[sm].tune) || 0) / 1200); const lg = ctx.createGain(); lg.gain.value = mix[i][1]; src.connect(lg).connect(g); src.start(Math.max(t0, ctx.currentTime)); src.stop(t0 + dur + 0.5); return src; });
+      g.connect(master); track(g, srcs, t0 + dur + 0.5);
     }).catch(() => synthTone(midi, dur, t0, vel));
   }
   // Electric piano: two-operator FM (a tine over a warm fundamental), a quick hammer click, a slow tremolo.
@@ -134,6 +148,15 @@ const Audio = (() => {
   }
   function setTone(t) { SOUND.tone = t === 'ep' ? 'ep' : 'grand'; }
 
+  // Play a recorded take exactly: notes with absolute ms times and durations and velocities 0..127
+  function playTake(notes, opts = {}) {
+    stop(true); ensureCtx(); unmuteIOS();
+    const token = ++PLAYER.token; PLAYER.playing = true;
+    const start = ctx.currentTime + 0.1; const first = notes.length ? Math.min(...notes.map(n => n.at)) : 0; let end = start;
+    for (const n of notes) { const at = start + (n.at - first) / 1000; const dur = Math.max(0.08, n.dur / 1000); playTone(n.n, dur, at, Math.min(1, 0.2 + n.v / 127 * 0.8)); end = Math.max(end, at + dur); }
+    if (opts.onNote) notes.forEach(n => { const ms = Math.max(0, (start + (n.at - first) / 1000 - ctx.currentTime) * 1000); setTimeout(() => { if (PLAYER.token === token) opts.onNote(n); }, ms); });
+    PLAYER.timer = setTimeout(() => { if (PLAYER.token === token) { PLAYER.playing = false; if (opts.onEnd) opts.onEnd(); } }, (end - ctx.currentTime) * 1000 + 300);
+  }
   // ---------- Progression player ----------
   // items: [{notes: [midi], beats}] ; opts: {bpm, feel: 'hold'|'groove', loop, onChord(i), onEnd()}
   const PLAYER = { timer: null, playing: false, stopAt: 0, token: 0 };
@@ -360,6 +383,6 @@ const Audio = (() => {
     MIC.stream = null;
   }
 
-  return { ensureCtx, unmuteIOS, setTone, SOUND, takeStart, takeNotes, get ctx() { return ctx; }, pianoInit, pianoPreload, playTone, playNotes, play, stop, PLAYER, PIANO, midiStart, midiStop, MIDI, micStart, micStop, MIC, matchChroma };
+  return { ensureCtx, unmuteIOS, setTone, SOUND, takeStart, takeNotes, playTake, get ctx() { return ctx; }, pianoInit, pianoPreload, playTone, playNotes, play, stop, PLAYER, PIANO, midiStart, midiStop, MIDI, micStart, micStop, MIC, matchChroma };
 })();
 if (typeof module !== 'undefined') module.exports = Audio;

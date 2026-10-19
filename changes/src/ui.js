@@ -93,6 +93,14 @@
     if (!S.settings.sound) { toast('Sound is off in settings'); return; }
     unlockAudio();
     if (A.PLAYER.playing) { A.stop(); if (playingCleanup) playingCleanup(); return; }
+    // the take itself, note for note, when nothing in the progression was changed
+    if (S.settings.feel === 'asPlayed' && S.take && S.take.notes && S.take.notes.length && prog === S.prog && !prog.some(c => c.changed) && prog.some(c => c.span)) {
+      const chips = container ? [...container.querySelectorAll('.chip')] : [];
+      const clear = () => chips.forEach(ch => ch.classList.remove('playing'));
+      playingCleanup = () => { clear(); playingCleanup = null; updatePlayButtons(false); }; updatePlayButtons(true);
+      A.playTake(S.take.notes, { onNote: (n) => { const i = prog.findIndex(c => c.span && n.at >= c.span.start - 30 && n.at < c.span.end); if (i >= 0 && chips[i] && !chips[i].classList.contains('playing')) { clear(); chips[i].classList.add('playing'); } }, onEnd: () => { if (playingCleanup) playingCleanup(); } });
+      return;
+    }
     const chips = container ? [...container.querySelectorAll('.chip')] : [];
     const clear = () => chips.forEach(ch => ch.classList.remove('playing'));
     playingCleanup = () => { clear(); playingCleanup = null; updatePlayButtons(false); };
@@ -203,7 +211,7 @@
         $('midiHint').textContent = st.inputs.length ? 'Hold a chord; lift and play the next. Pedal down keeps the chord.' : 'Connect a USB or Bluetooth keyboard. It appears here automatically.';
       },
       onLive: (c, notes) => { const el = $('midiLive'); if (!c) { el.textContent = '—'; $('midiSub').textContent = 'listening'; return; } el.innerHTML = chordInner(c); el.style.color = M.css(moodOf(c, S.key), 8); $('midiSub').textContent = c.melody && c.melody.length ? 'melody: ' + c.melody.map(m => T.pcName(m.note % 12, S.key)).join(' ') : notes.map(n => T.pcName(n % 12, S.key)).join(' '); },
-      onChord: (c, ms) => { addChord(Object.assign({}, c, { beats: 4, ms, src: 'midi' })); },
+      onChord: (c, ms) => { addChord(Object.assign({}, c, { beats: 4, ms, src: 'midi' })); const notes = A.takeNotes(); if (notes.length) S.take = { notes, at: Date.now() }; },
     });
     if (ok) $('midiLbl').textContent = 'Reading';
   }
@@ -261,7 +269,7 @@
   function finishMidiTake() {
     if (A.MIDI.current) { const cur = A.MIDI.current; cur.chord.span = { start: A.MIDI.currentSince - A.MIDI.take.t0, end: performance.now() - A.MIDI.take.t0 }; addChord(Object.assign({}, cur.chord, { beats: 4, ms: performance.now() - A.MIDI.currentSince, src: 'midi' })); A.MIDI.current = null; }
     const notes = A.takeNotes();
-    if (notes.length) S.take = { notes, at: Date.now() };
+    if (notes.length) { S.take = { notes, at: Date.now() }; S.settings.feel = 'asPlayed'; }
     finalizeDurations(); updateHeardTitle(); renderHeard();
     $('midiLive').textContent = '—'; $('midiSub').textContent = `take kept: ${notes.length} notes`;
     A.takeStart();
@@ -321,10 +329,24 @@
     $('depthDots').innerHTML = Array.from({ length: 5 }, (_, i) => `<i class="${i < S.depth ? 'on' : ''} ${i >= cap ? 'cap' : ''}"></i>`).join('');
     $('depthDown').disabled = S.depth <= 1; $('depthUp').disabled = S.depth >= cap;
     $('styleBlurb').textContent = `${R.STYLES[S.style].name} goes to ${cap}`;
-    $('moodChips').innerHTML = MOODS.map(([id, name]) => `<button class="small ${(S.mood || '') === id ? 'on' : ''}" data-mood="${id}">${name}</button>`).join('');
-    $('moodChips').querySelectorAll('button').forEach(b => b.addEventListener('click', () => { S.mood = b.dataset.mood || null; recompute(); }));
+    renderWheel();
     $('dareBtn').classList.toggle('on', S.dare);
     $('shadowBtn').classList.toggle('on', !!S.shadow);
+  }
+  // The emotion wheel (GEMS): nine segments, a term row for the chosen one
+  function renderWheel() {
+    const host = $('moodChips'); const cur = S.mood ? String(S.mood).split(':') : [null, null];
+    const W = 240, cx = 120, cy = 120, r0 = 48, r1 = 112; const n = M.GEMS.length;
+    const seg = (i) => { const a0 = (i / n) * Math.PI * 2 - Math.PI / 2 + 0.02, a1 = ((i + 1) / n) * Math.PI * 2 - Math.PI / 2 - 0.02; const p = (r, a) => `${(cx + r * Math.cos(a)).toFixed(1)} ${(cy + r * Math.sin(a)).toFixed(1)}`; return `M ${p(r0, a0)} A ${r0} ${r0} 0 0 1 ${p(r0, a1)} L ${p(r1, a1)} A ${r1} ${r1} 0 0 0 ${p(r1, a0)} Z`; };
+    const mid = (i) => { const a = ((i + 0.5) / n) * Math.PI * 2 - Math.PI / 2; return [cx + 80 * Math.cos(a), cy + 80 * Math.sin(a)]; };
+    let svg = `<svg class="wheel" viewBox="0 0 ${W} ${W}" role="group" aria-label="Emotion wheel">`;
+    M.GEMS.forEach((g, i) => { const on = cur[0] === g.id; const [mx, my] = mid(i); svg += `<path d="${seg(i)}" data-g="${g.id}" fill="hsl(${g.hue} ${on ? 62 : 38}% calc(${on ? 48 : 34}% + var(--lshift) * 0.6))" stroke="${on ? 'var(--accent)' : 'var(--bg)'}" stroke-width="${on ? 2.5 : 2}" style="cursor:pointer"><title>${esc(g.name)}</title></path><text x="${mx.toFixed(1)}" y="${(my + 4).toFixed(1)}" text-anchor="middle" font-size="${g.name.length > 9 ? 8.5 : 10}" font-family="var(--body)" font-weight="600" fill="#fff" fill-opacity="${on ? 1 : .85}" style="pointer-events:none">${esc(g.name.split(' ')[0])}</text>`; });
+    const g = cur[0] ? M.gemsById(cur[0]) : null;
+    svg += `<circle cx="${cx}" cy="${cy}" r="${r0 - 4}" fill="var(--panel2)" stroke="var(--line)" data-g="" style="cursor:pointer"/><text x="${cx}" y="${cy - 2}" text-anchor="middle" font-size="10.5" font-family="var(--body)" font-weight="600" fill="var(--fg)" style="pointer-events:none">${g ? esc(g.name.split(' ')[0]) : 'Any'}</text><text x="${cx}" y="${cy + 11}" text-anchor="middle" font-size="8.5" font-family="var(--body)" fill="var(--muted)" style="pointer-events:none">${g ? esc(cur[1] || g.sup) : 'feeling'}</text></svg>`;
+    const terms = g ? `<div class="chips" style="align-content:flex-start">${Object.keys(g.terms).map(t => `<button class="small ${cur[1] === t ? 'on' : ''}" data-term="${esc(t)}">${esc(t)}</button>`).join('')}<button class="small ghost" data-term="">any ${esc(g.name.toLowerCase())}</button></div><div class="hint">${esc(g.name)} is one of the nine emotions music is measured to evoke (Geneva Emotional Music Scale). Pick a shade to narrow it.</div>` : `<div class="hint">Tap a feeling. Options are then ranked by how close they sit to it on the brightness–tension map, by their color words, and by which devices usually carry that feeling. From the Geneva Emotional Music Scale; the app says "feels like", never "is".</div>`;
+    host.innerHTML = `<div class="wheelwrap">${svg}<div class="wheelside">${terms}</div></div>`;
+    host.querySelectorAll('[data-g]').forEach(p => p.addEventListener('click', () => { const id = p.dataset.g; S.mood = id ? id : null; S.openCard = -1; recompute(); }));
+    host.querySelectorAll('[data-term]').forEach(b => b.addEventListener('click', () => { const t = b.dataset.term; S.mood = t ? `${cur[0]}:${t}` : cur[0]; S.openCard = -1; recompute(); }));
   }
   $('depthDown').addEventListener('click', () => { S.depth = Math.max(1, S.depth - 1); S.openCard = -1; recompute(); save(); });
   $('depthUp').addEventListener('click', () => { S.depth = Math.min(R.STYLES[S.style].ceiling, S.depth + 1); S.openCard = -1; recompute(); save(); });
@@ -364,7 +386,7 @@
     const depthDots = Array.from({ length: 5 }, (_, i) => `<i class="${i < (o.depth || 1) ? 'on' : ''}"></i>`).join('');
     const words = (o.mood.focus && o.mood.focus.words.length ? o.mood.focus.words : o.mood.words).slice(0, 2);
     return `<div class="card ${S.openCard === idx ? 'open' : ''}" data-card="${idx}">
-      <div class="head"><span class="device">${esc(o.device)}</span><span class="ddots" title="depth ${o.depth}">${depthDots}</span><span class="spacer"></span><span class="words"><b>${esc(words[0] || '')}</b>${words[1] ? ', ' + esc(words[1]) : ''}</span></div>
+      <div class="head"><span class="device">${esc(o.device)}</span><span class="ddots" title="depth ${o.depth}">${depthDots}</span><span class="spacer"></span><span class="words">${o.gems ? `<span class="gem" style="--gh:${o.gems.hue}">${esc(o.gems.name.split(' ')[0])}</span> ` : ''}<b>${esc(words[0] || '')}</b>${words[1] ? ', ' + esc(words[1]) : ''}</span></div>
       <div class="moodbar" style="--g:${gradientOf(o.prog, S.key)}"></div>
       <div class="chips scroll">${o.prog.map((c, i) => chipHTML(c, S.key, { i, prog: o.prog })).join('')}</div>
       <div class="rn">${esc(o.roman.join(' – '))}</div>
