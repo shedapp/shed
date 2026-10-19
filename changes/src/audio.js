@@ -265,20 +265,22 @@ const Audio = (() => {
           if (isMelody && id && id.root === cur.chord.root && id.q === cur.chord.q) { cur.chord.melody = (cur.chord.melody || []).concat([{ note: n, at: t - MIDI.currentSince }]); MIDI.onLive && MIDI.onLive(cur.chord, held); return; }
           if (isMelody && n > core[core.length - 1]) { cur.chord.melody = (cur.chord.melody || []).concat([{ note: n, at: t - MIDI.currentSince }]); MIDI.onLive && MIDI.onLive(cur.chord, held); return; }
         }
+        // a single note with no chord under it: melody over the chord just committed (lifted hands, still singing)
+        if (struck.length === 1 && !cur && MIDI.lastCommitted && t - MIDI.lastCommittedAt < 2500 && held.length < 2) { MIDI.onMelody && MIDI.onMelody(struck[0]); MIDI.onLive && MIDI.onLive(null, held); return; }
         const notes = held.length >= 2 ? held : struck;
         if (notes.length >= 2) {
           const id = T.identify(notes, { rootless: notes.length >= 4 });
           if (id) {
             const label = `${id.root}:${id.q}:${id.bass ?? ''}`;
             if (!cur || cur.label !== label) {
-              if (cur && t - MIDI.currentSince > 200 && MIDI.onChord) { cur.chord.span = { start: MIDI.currentSince - MIDI.take.t0, end: t - MIDI.take.t0 }; MIDI.onChord(cur.chord, t - MIDI.currentSince); }
+              if (cur && t - MIDI.currentSince > 200 && MIDI.onChord) { cur.chord.span = { start: MIDI.currentSince - MIDI.take.t0, end: t - MIDI.take.t0 }; MIDI.lastCommitted = cur.chord; MIDI.lastCommittedAt = t; MIDI.onChord(cur.chord, t - MIDI.currentSince); }
               MIDI.current = { label, chord: Object.assign({}, id, { notes: notes.slice(), melody: [] }) }; MIDI.currentSince = t;
             }
             MIDI.onLive && MIDI.onLive(MIDI.current.chord, held);
           }
         }
       } else if (held.length === 0 && MIDI.current) {
-        if (t - MIDI.currentSince > 200 && MIDI.onChord) { MIDI.current.chord.span = { start: MIDI.currentSince - MIDI.take.t0, end: t - MIDI.take.t0 }; MIDI.onChord(MIDI.current.chord, t - MIDI.currentSince); }
+        if (t - MIDI.currentSince > 200 && MIDI.onChord) { MIDI.current.chord.span = { start: MIDI.currentSince - MIDI.take.t0, end: t - MIDI.take.t0 }; MIDI.lastCommitted = MIDI.current.chord; MIDI.lastCommittedAt = t; MIDI.onChord(MIDI.current.chord, t - MIDI.currentSince); }
         MIDI.current = null; MIDI.onLive && MIDI.onLive(null, []);
       }
     }, onset ? 65 : 120);

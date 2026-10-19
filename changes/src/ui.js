@@ -222,6 +222,7 @@
       onLive: (c, notes) => { drawHeld(notes || []); const el = $('midiLive'); if (!c) { el.textContent = '—'; $('midiSub').textContent = 'listening'; return; } el.innerHTML = chordInner(c); el.style.color = M.css(moodOf(c, S.key), 8); $('midiSub').textContent = c.melody && c.melody.length ? 'melody: ' + c.melody.map(m => T.pcName(m.note % 12, S.key)).join(' ') : notes.map(n => T.pcName(n % 12, S.key)).join(' '); },
       onChord: (c, ms) => { addChord(Object.assign({}, c, { beats: 4, ms, src: 'midi' })); const notes = A.takeNotes(); if (notes.length) { S.take = { notes, at: Date.now() }; S.settings.feel = 'asPlayed'; } $('midiSub').textContent = `take: ${notes.length} notes`; save(); },
       onNotes: (held) => drawHeld(held),
+      onMelody: (n) => { const L = S.prog[S.prog.length - 1]; if (!L) return; L.melody = (L.melody || []).concat([n]); if (L.span) L.span.end = performance.now() - A.MIDI.take.t0; const notes = A.takeNotes(); if (notes.length) S.take = { notes, at: Date.now() }; renderHeard(); },
     });
     if (ok) $('midiLbl').textContent = 'Reading';
   }

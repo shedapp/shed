@@ -2951,20 +2951,22 @@ const Audio = (() => {
           if (isMelody && id && id.root === cur.chord.root && id.q === cur.chord.q) { cur.chord.melody = (cur.chord.melody || []).concat([{ note: n, at: t - MIDI.currentSince }]); MIDI.onLive && MIDI.onLive(cur.chord, held); return; }
           if (isMelody && n > core[core.length - 1]) { cur.chord.melody = (cur.chord.melody || []).concat([{ note: n, at: t - MIDI.currentSince }]); MIDI.onLive && MIDI.onLive(cur.chord, held); return; }
         }
+        // a single note with no chord under it: melody over the chord just committed (lifted hands, still singing)
+        if (struck.length === 1 && !cur && MIDI.lastCommitted && t - MIDI.lastCommittedAt < 2500 && held.length < 2) { MIDI.onMelody && MIDI.onMelody(struck[0]); MIDI.onLive && MIDI.onLive(null, held); return; }
         const notes = held.length >= 2 ? held : struck;
         if (notes.length >= 2) {
           const id = T.identify(notes, { rootless: notes.length >= 4 });
           if (id) {
             const label = `${id.root}:${id.q}:${id.bass ?? ''}`;
             if (!cur || cur.label !== label) {
-              if (cur && t - MIDI.currentSince > 200 && MIDI.onChord) { cur.chord.span = { start: MIDI.currentSince - MIDI.take.t0, end: t - MIDI.take.t0 }; MIDI.onChord(cur.chord, t - MIDI.currentSince); }
+              if (cur && t - MIDI.currentSince > 200 && MIDI.onChord) { cur.chord.span = { start: MIDI.currentSince - MIDI.take.t0, end: t - MIDI.take.t0 }; MIDI.lastCommitted = cur.chord; MIDI.lastCommittedAt = t; MIDI.onChord(cur.chord, t - MIDI.currentSince); }
               MIDI.current = { label, chord: Object.assign({}, id, { notes: notes.slice(), melody: [] }) }; MIDI.currentSince = t;
             }
             MIDI.onLive && MIDI.onLive(MIDI.current.chord, held);
           }
         }
       } else if (held.length === 0 && MIDI.current) {
-        if (t - MIDI.currentSince > 200 && MIDI.onChord) { MIDI.current.chord.span = { start: MIDI.currentSince - MIDI.take.t0, end: t - MIDI.take.t0 }; MIDI.onChord(MIDI.current.chord, t - MIDI.currentSince); }
+        if (t - MIDI.currentSince > 200 && MIDI.onChord) { MIDI.current.chord.span = { start: MIDI.currentSince - MIDI.take.t0, end: t - MIDI.take.t0 }; MIDI.lastCommitted = MIDI.current.chord; MIDI.lastCommittedAt = t; MIDI.onChord(MIDI.current.chord, t - MIDI.currentSince); }
         MIDI.current = null; MIDI.onLive && MIDI.onLive(null, []);
       }
     }, onset ? 65 : 120);
@@ -3315,7 +3317,7 @@ if (typeof module !== 'undefined') module.exports = Sync;
   const T = Theory, M = Mood, R = Reharm, V = Voicing, A = Audio;
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  const BUILD = '2610192007';
+  const BUILD = '2610192012';
 
   // ---------- state ----------
   const DEFAULTS = { symbols: 'plain', twoHands: false, span: 'default', sound: true, tone: 'grand', feel: 'hold', bpm: 76, look: 'night', fingers: false, instrument: 'piano', styles: ['neosoul', 'gospel'] };
@@ -3534,6 +3536,7 @@ if (typeof module !== 'undefined') module.exports = Sync;
       onLive: (c, notes) => { drawHeld(notes || []); const el = $('midiLive'); if (!c) { el.textContent = '—'; $('midiSub').textContent = 'listening'; return; } el.innerHTML = chordInner(c); el.style.color = M.css(moodOf(c, S.key), 8); $('midiSub').textContent = c.melody && c.melody.length ? 'melody: ' + c.melody.map(m => T.pcName(m.note % 12, S.key)).join(' ') : notes.map(n => T.pcName(n % 12, S.key)).join(' '); },
       onChord: (c, ms) => { addChord(Object.assign({}, c, { beats: 4, ms, src: 'midi' })); const notes = A.takeNotes(); if (notes.length) { S.take = { notes, at: Date.now() }; S.settings.feel = 'asPlayed'; } $('midiSub').textContent = `take: ${notes.length} notes`; save(); },
       onNotes: (held) => drawHeld(held),
+      onMelody: (n) => { const L = S.prog[S.prog.length - 1]; if (!L) return; L.melody = (L.melody || []).concat([n]); if (L.span) L.span.end = performance.now() - A.MIDI.take.t0; const notes = A.takeNotes(); if (notes.length) S.take = { notes, at: Date.now() }; renderHeard(); },
     });
     if (ok) $('midiLbl').textContent = 'Reading';
   }
