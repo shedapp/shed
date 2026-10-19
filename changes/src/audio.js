@@ -5,6 +5,23 @@ const Audio = (() => {
   const mod = (n, m) => ((n % m) + m) % m;
   let ctx = null;
   let master = null, verb = null;
+  const SOUND = { tone: 'grand' }; // 'grand' | 'ep'
+  // iPhone mutes Web Audio while the ring/silent switch is on, unless a media element is playing: a looping silent
+  // clip moves the page onto the media channel. Harmless everywhere else.
+  let unmuteEl = null;
+  function unmuteIOS() {
+    if (unmuteEl) return;
+    try {
+      unmuteEl = document.createElement('audio'); unmuteEl.setAttribute('playsinline', ''); unmuteEl.loop = true; unmuteEl.volume = 0.01;
+      // 0.1 s of silence, 8 kHz mono WAV
+      const n = 800, buf = new Uint8Array(44 + n); const dv = new DataView(buf.buffer);
+      const str = (o, t) => { for (let i = 0; i < t.length; i++) buf[o + i] = t.charCodeAt(i); };
+      str(0, 'RIFF'); dv.setUint32(4, 36 + n, true); str(8, 'WAVE'); str(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true); dv.setUint32(24, 8000, true); dv.setUint32(28, 8000, true); dv.setUint16(32, 1, true); dv.setUint16(34, 8, true); str(36, 'data'); dv.setUint32(40, n, true); buf.fill(128, 44);
+      let b64 = ''; const bin = String.fromCharCode.apply(null, buf); b64 = btoa(bin);
+      unmuteEl.src = 'data:audio/wav;base64,' + b64;
+      const p = unmuteEl.play(); if (p && p.catch) p.catch(() => {});
+    } catch (e) { /* best effort */ }
+  }
   function ensureCtx() {
     if (ctx) { if (ctx.state === 'suspended') ctx.resume().catch(() => {}); return ctx; }
     ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
@@ -52,6 +69,7 @@ const Audio = (() => {
   // Play one note: vel 0..1, dur seconds held, when = ctx time
   function playTone(midi, dur, when, vel = 0.6) {
     ensureCtx(); const t0 = when || ctx.currentTime;
+    if (SOUND.tone === 'ep') return epTone(midi, dur, t0, vel);
     if (!PIANO.ready || PIANO.failed) return synthTone(midi, dur, t0, vel);
     const sm = nearestSample(midi), layer = layerFor(vel);
     const cached = PIANO.cache.get(sm + ':' + layer);
@@ -64,6 +82,30 @@ const Audio = (() => {
       src.connect(g).connect(master); src.start(Math.max(t0, ctx.currentTime)); src.stop(t0 + dur + 0.5);
     }).catch(() => synthTone(midi, dur, t0, vel));
   }
+  // Electric piano: two-operator FM (a tine over a warm fundamental), a quick hammer click, a slow tremolo.
+  // Modeled on the classic suitcase sound rather than a preset: the modulation index falls fast so the attack
+  // barks and the sustain goes glassy, bass notes get more body, top notes get more bell.
+  function epTone(midi, dur, t0, vel = 0.6) {
+    const f = 440 * Math.pow(2, (midi - 69) / 12);
+    const out = ctx.createGain(); const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2600 + 2600 * vel; lp.Q.value = 0.4;
+    const car = ctx.createOscillator(); car.type = 'sine'; car.frequency.value = f;
+    const mod = ctx.createOscillator(); mod.type = 'sine'; mod.frequency.value = f * (midi < 48 ? 1 : 1); // 1:1 ratio
+    const mg = ctx.createGain(); const idx = f * (0.9 + 1.6 * vel) * (midi < 52 ? 1.3 : 1);
+    mg.gain.setValueAtTime(idx, t0); mg.gain.exponentialRampToValueAtTime(idx * 0.08, t0 + 0.35); mg.gain.exponentialRampToValueAtTime(Math.max(1, idx * 0.03), t0 + dur + 0.3);
+    mod.connect(mg).connect(car.frequency);
+    const tine = ctx.createOscillator(); tine.type = 'sine'; tine.frequency.value = f * 7; const tg = ctx.createGain();
+    tg.gain.setValueAtTime(0.09 * vel * (midi > 72 ? 0.5 : 1), t0); tg.gain.exponentialRampToValueAtTime(0.0005, t0 + 0.09);
+    const bell = ctx.createOscillator(); bell.type = 'sine'; bell.frequency.value = f * 4; const bg = ctx.createGain();
+    bg.gain.setValueAtTime(0.05 * vel, t0); bg.gain.exponentialRampToValueAtTime(0.0005, t0 + 0.6 + 0.4 * vel);
+    const amp = ctx.createGain(); const a = 0.28 * (0.45 + 0.55 * vel) * (midi < 48 ? 0.8 : 1);
+    amp.gain.setValueAtTime(0, t0); amp.gain.linearRampToValueAtTime(a, t0 + 0.004); amp.gain.exponentialRampToValueAtTime(a * 0.55, t0 + 0.9); amp.gain.exponentialRampToValueAtTime(a * 0.25, t0 + Math.max(1.2, dur)); amp.gain.exponentialRampToValueAtTime(0.0005, t0 + dur + 0.35);
+    // tremolo (suitcase vibrato), gentle
+    const lfo = ctx.createOscillator(); lfo.frequency.value = 4.6; const lg = ctx.createGain(); lg.gain.value = 0.10; const trem = ctx.createGain(); trem.gain.value = 1;
+    lfo.connect(lg).connect(trem.gain);
+    car.connect(amp); tine.connect(tg).connect(amp); bell.connect(bg).connect(amp);
+    amp.connect(lp).connect(trem).connect(out).connect(master); out.gain.value = 1;
+    [car, mod, tine, bell, lfo].forEach(o => { o.start(t0); o.stop(t0 + dur + 0.45); });
+  }
   function synthTone(midi, dur, t0, vel = 0.6) {
     const f = 440 * Math.pow(2, (midi - 69) / 12);
     const o1 = ctx.createOscillator(), o2 = ctx.createOscillator(), g = ctx.createGain(), lp = ctx.createBiquadFilter();
@@ -75,16 +117,17 @@ const Audio = (() => {
   }
   // Play a voicing (array of MIDI notes) with a gentle roll
   function playNotes(notes, dur = 1.6, when, vel = 0.62, roll = 0.012) {
-    ensureCtx(); const t0 = when || ctx.currentTime + 0.02;
+    ensureCtx(); unmuteIOS(); const t0 = when || ctx.currentTime + 0.02;
     notes.slice().sort((a, b) => a - b).forEach((n, i) => playTone(n, dur, t0 + i * roll, vel * (i === 0 ? 1.0 : 0.92)));
     return t0;
   }
+  function setTone(t) { SOUND.tone = t === 'ep' ? 'ep' : 'grand'; }
 
   // ---------- Progression player ----------
   // items: [{notes: [midi], beats}] ; opts: {bpm, feel: 'hold'|'groove', loop, onChord(i), onEnd()}
   const PLAYER = { timer: null, playing: false, stopAt: 0, token: 0 };
   function play(items, opts = {}) {
-    stop(); ensureCtx();
+    stop(true); ensureCtx(); unmuteIOS();
     const bpm = opts.bpm || 76, spb = 60 / bpm, feel = opts.feel || 'hold';
     const token = ++PLAYER.token; PLAYER.playing = true;
     const start = ctx.currentTime + 0.08;
@@ -113,11 +156,12 @@ const Audio = (() => {
       PLAYER.timer = setTimeout(() => { if (PLAYER.token === token) { PLAYER.playing = false; if (opts.onEnd) opts.onEnd(); } }, ms);
     }
   }
-  function stop() {
+  function stop(silent) {
+    const was = PLAYER.playing;
     if (PLAYER.timer) { clearInterval(PLAYER.timer); clearTimeout(PLAYER.timer); PLAYER.timer = null; }
     PLAYER.token++; PLAYER.playing = false;
-    // soften anything already ringing by dipping the master briefly
-    if (master && ctx) { const g = master.gain; const now = ctx.currentTime; g.cancelScheduledValues(now); g.setValueAtTime(g.value, now); g.linearRampToValueAtTime(0.0001, now + 0.12); g.setValueAtTime(0.9, now + 0.2); }
+    // soften anything already ringing by dipping the master briefly (only when something was actually playing)
+    if (was && !silent && master && ctx) { const g = master.gain; const now = ctx.currentTime; g.cancelScheduledValues(now); g.setValueAtTime(g.value, now); g.linearRampToValueAtTime(0.0001, now + 0.12); g.setValueAtTime(0.9, now + 0.2); }
   }
 
   // ---------- MIDI ----------
@@ -265,6 +309,6 @@ const Audio = (() => {
     MIC.stream = null;
   }
 
-  return { ensureCtx, get ctx() { return ctx; }, pianoInit, pianoPreload, playTone, playNotes, play, stop, PLAYER, PIANO, midiStart, midiStop, MIDI, micStart, micStop, MIC, matchChroma };
+  return { ensureCtx, unmuteIOS, setTone, SOUND, get ctx() { return ctx; }, pianoInit, pianoPreload, playTone, playNotes, play, stop, PLAYER, PIANO, midiStart, midiStop, MIDI, micStart, micStop, MIC, matchChroma };
 })();
 if (typeof module !== 'undefined') module.exports = Audio;

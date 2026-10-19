@@ -13,9 +13,11 @@ function assemble(embed) {
   return out;
 }
 fs.writeFileSync(path.join(root, 'index.html'), assemble(false));
-fs.mkdirSync(path.join(root, 'dist'), { recursive: true });
-fs.writeFileSync(path.join(root, 'dist', 'artifact.html'), assemble(true));
+if (fs.existsSync(path.join(__dirname, 'piano-compact.json'))) {
+  fs.mkdirSync(path.join(root, 'dist'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'dist', 'artifact.html'), assemble(true));
+} else console.log('no src/piano-compact.json: skipping the self-contained dist/artifact.html build');
 // service worker build stamp
 const sw = read('sw.template.js').replace('__BUILD__', build);
 fs.writeFileSync(path.join(root, 'sw.js'), sw);
-console.log('built', build, 'index.html', fs.statSync(path.join(root, 'index.html')).size, 'bytes; dist/artifact.html', fs.statSync(path.join(root, 'dist', 'artifact.html')).size, 'bytes');
+console.log('built', build, 'index.html', fs.statSync(path.join(root, 'index.html')).size, 'bytes');

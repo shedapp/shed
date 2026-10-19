@@ -6,7 +6,7 @@
   const BUILD = '__BUILD__';
 
   // ---------- state ----------
-  const DEFAULTS = { symbols: 'plain', twoHands: false, span: 'default', sound: true, feel: 'hold', bpm: 76, look: 'night', fingers: false, instrument: 'piano', styles: ['neosoul', 'gospel'] };
+  const DEFAULTS = { symbols: 'plain', twoHands: false, span: 'default', sound: true, tone: 'grand', feel: 'hold', bpm: 76, look: 'night', fingers: false, instrument: 'piano', styles: ['neosoul', 'gospel'] };
   const S = {
     key: { tonic: 0, mode: 'major' }, keyLocked: false,
     prog: [], captured: [],
@@ -57,7 +57,7 @@
     prog.forEach((c, i) => { const m = moodOf(c, key, i, prog); const col = `hsl(${m.hue} ${Math.round(48 + 42 * m.tension)}% calc(${Math.round(46 + 24 * m.bright)}% + var(--lshift)))`; const a = acc / total * 100, b = (acc + (c.beats || 4)) / total * 100; stops.push(`${col} ${a.toFixed(1)}%`, `${col} ${b.toFixed(1)}%`); acc += (c.beats || 4); });
     return stops.join(',');
   }
-  function unlockAudio() { try { A.ensureCtx(); } catch (e) {} }
+  function unlockAudio() { try { A.ensureCtx(); A.unmuteIOS(); A.setTone(S.settings.tone); } catch (e) {} }
   function playChord(c, dur = 1.7) {
     if (!S.settings.sound) return; unlockAudio();
     const v = V.voiceProgression([c], S.key, S.style, { span: S.settings.span })[0];
@@ -591,7 +591,7 @@
       <div class="field"><label>Chord symbols</label><div class="seg" id="sSym"><button data-v="plain" class="${st.symbols === 'plain' ? 'on' : ''}">Cmaj7 · Cm7 · Cm7♭5</button><button data-v="jazz" class="${st.symbols === 'jazz' ? 'on' : ''}">CΔ7 · C-7 · Cø7</button></div></div>
       <div class="field"><label>Piano chart</label><div class="row"><button class="small ${st.twoHands ? 'on' : ''}" id="sHands">Two hands</button><div class="seg" id="sSpan"><button data-v="small" class="${st.span === 'small' ? 'on' : ''}">Small hands</button><button data-v="default" class="${st.span === 'default' ? 'on' : ''}">A tenth</button></div></div></div>
       <div class="field"><label>Guitar chart</label><div class="row"><button class="small ${st.fingers ? 'on' : ''}" id="sFingers">Finger numbers</button></div></div>
-      <div class="field"><label>Sound</label><div class="row"><button class="small ${st.sound ? 'on' : ''}" id="sSound">${st.sound ? 'Piano on' : 'Piano off'}</button><div class="seg" id="sFeel"><button data-v="hold" class="${st.feel === 'hold' ? 'on' : ''}">Hold</button><button data-v="groove" class="${st.feel === 'groove' ? 'on' : ''}">Groove</button></div><span class="hint">${A.PIANO.source === 'hosted' ? 'Salamander grand, full set' : A.PIANO.source === 'embedded' ? 'Salamander grand, compact set' : 'synth (piano unavailable)'}</span></div></div>
+      <div class="field"><label>Sound</label><div class="seg" id="sTone"><button data-v="grand" class="${st.sound && st.tone !== 'ep' ? 'on' : ''}">Grand piano</button><button data-v="ep" class="${st.sound && st.tone === 'ep' ? 'on' : ''}">Electric piano</button><button data-v="off" class="${!st.sound ? 'on' : ''}">Off</button></div><div class="row"><div class="seg" id="sFeel"><button data-v="hold" class="${st.feel === 'hold' ? 'on' : ''}">Hold</button><button data-v="groove" class="${st.feel === 'groove' ? 'on' : ''}">Groove</button></div><span class="hint">${A.PIANO.source === 'hosted' ? 'Salamander grand, full set' : A.PIANO.source === 'embedded' ? 'Salamander grand, compact set' : 'grand unavailable here'} · the EP is a tine-model synth</span></div><div class="hint">No sound on iPhone? Flip the ring/silent switch, or turn the volume up — the app tries to play through the media channel, but the switch wins on some iOS versions.</div></div>
       <div class="field"><label>Tempo <span id="sBpmLbl" style="font-family:var(--mono);color:var(--fg)">${st.bpm}</span> bpm</label><input type="range" id="sBpm" min="50" max="140" value="${st.bpm}"></div>
       <div class="field"><label>Look</label><div class="seg" id="sLook"><button data-v="night" class="${st.look === 'night' ? 'on' : ''}">Night</button><button data-v="paper" class="${st.look === 'paper' ? 'on' : ''}">Paper</button></div></div>
       <div class="field"><label>About</label><div class="hint">Changes ${esc(BUILD)}. Recognition, suggestions, voicings and sound all run on this device; nothing is uploaded. The vocabulary is written by musicians, not generated — every option says why. Piano: Salamander Grand Piano by Alexander Holm (CC BY 3.0).</div><div class="row"><button class="small ghost" id="sOnboard">Show the welcome again</button></div></div>`, (el) => {
@@ -601,7 +601,7 @@
       el.querySelector('#sHands').addEventListener('click', (e) => { st.twoHands = !st.twoHands; e.currentTarget.classList.toggle('on', st.twoHands); upd(); });
       el.querySelectorAll('#sSpan button').forEach(b => b.addEventListener('click', () => { st.span = b.dataset.v; el.querySelectorAll('#sSpan button').forEach(x => x.classList.toggle('on', x === b)); upd(); }));
       el.querySelector('#sFingers').addEventListener('click', (e) => { st.fingers = !st.fingers; e.currentTarget.classList.toggle('on', st.fingers); upd(); });
-      el.querySelector('#sSound').addEventListener('click', (e) => { st.sound = !st.sound; e.currentTarget.classList.toggle('on', st.sound); e.currentTarget.textContent = st.sound ? 'Piano on' : 'Piano off'; upd(); });
+      el.querySelectorAll('#sTone button').forEach(b => b.addEventListener('click', () => { const v = b.dataset.v; st.sound = v !== 'off'; if (v !== 'off') st.tone = v; el.querySelectorAll('#sTone button').forEach(x => x.classList.toggle('on', x === b)); A.setTone(st.tone); upd(); if (st.sound) playChord({ root: S.key.tonic, q: S.key.mode === 'major' ? 'maj9' : 'm9' }, 1.6); }));
       el.querySelectorAll('#sFeel button').forEach(b => b.addEventListener('click', () => { st.feel = b.dataset.v; el.querySelectorAll('#sFeel button').forEach(x => x.classList.toggle('on', x === b)); upd(); }));
       el.querySelector('#sBpm').addEventListener('input', (e) => { st.bpm = +e.target.value; el.querySelector('#sBpmLbl').textContent = st.bpm; const sg = currentSong(); if (sg) sg.bpm = st.bpm; save(); });
       el.querySelectorAll('#sLook button').forEach(b => b.addEventListener('click', () => { st.look = b.dataset.v; el.querySelectorAll('#sLook button').forEach(x => x.classList.toggle('on', x === b)); upd(); }));
