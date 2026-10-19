@@ -27,13 +27,15 @@ const Audio = (() => {
     ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
     master = ctx.createGain(); master.gain.value = 0.9;
     const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -14; comp.ratio.value = 3; comp.knee.value = 10; comp.attack.value = 0.005; comp.release.value = 0.2;
-    // a small room: short synthetic impulse so chords sit in a space instead of a vacuum
-    verb = ctx.createConvolver(); verb.buffer = impulse(1.6, 2.4); const wet = ctx.createGain(); wet.gain.value = 0.16;
-    master.connect(comp).connect(ctx.destination); master.connect(verb).connect(wet).connect(comp);
+    master.connect(comp).connect(ctx.destination); // the dry path first: nothing below may ever leave the output unconnected
+    try { // a small room: short synthetic impulse at the context's own sample rate
+      verb = ctx.createConvolver(); verb.buffer = impulse(1.6, 2.4); const wet = ctx.createGain(); wet.gain.value = 0.16;
+      master.connect(verb).connect(wet).connect(comp);
+    } catch (e) { verb = null; }
     return ctx;
   }
   function impulse(seconds, decay) {
-    const sr = 44100, len = Math.floor(sr * seconds); const buf = (ctx || new OfflineAudioContext(1, 1, sr)).createBuffer(2, len, sr);
+    const sr = ctx.sampleRate, len = Math.floor(sr * seconds); const buf = ctx.createBuffer(2, len, sr);
     for (let ch = 0; ch < 2; ch++) { const d = buf.getChannelData(ch); let seed = 7 + ch; for (let i = 0; i < len; i++) { seed = (seed * 16807) % 2147483647; const r = seed / 2147483647 * 2 - 1; d[i] = r * Math.pow(1 - i / len, decay) * 0.6; } }
     return buf;
   }
@@ -89,10 +91,12 @@ const Audio = (() => {
     const f = 440 * Math.pow(2, (midi - 69) / 12);
     const out = ctx.createGain(); const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2600 + 2600 * vel; lp.Q.value = 0.4;
     const car = ctx.createOscillator(); car.type = 'sine'; car.frequency.value = f;
-    const mod = ctx.createOscillator(); mod.type = 'sine'; mod.frequency.value = f * (midi < 48 ? 1 : 1); // 1:1 ratio
-    const mg = ctx.createGain(); const idx = f * (0.9 + 1.6 * vel) * (midi < 52 ? 1.3 : 1);
-    mg.gain.setValueAtTime(idx, t0); mg.gain.exponentialRampToValueAtTime(idx * 0.08, t0 + 0.35); mg.gain.exponentialRampToValueAtTime(Math.max(1, idx * 0.03), t0 + dur + 0.3);
+    const mod = ctx.createOscillator(); mod.type = 'sine'; mod.frequency.value = f; // 1:1 ratio: the tine's bark
+    const mg = ctx.createGain(); const idx = f * (0.7 + 2.2 * vel * vel) * (midi < 52 ? 1.35 : midi > 76 ? 0.7 : 1);
+    mg.gain.setValueAtTime(idx, t0); mg.gain.exponentialRampToValueAtTime(idx * 0.07, t0 + 0.22 + 0.18 * vel); mg.gain.exponentialRampToValueAtTime(Math.max(1, idx * 0.025), t0 + dur + 0.3);
     mod.connect(mg).connect(car.frequency);
+    // a second, faintly detuned voice gives the chorus-y width of a real tine over its pickup
+    const car2 = ctx.createOscillator(); car2.type = 'sine'; car2.frequency.value = f * 1.0012; const g2 = ctx.createGain(); g2.gain.value = 0.35; mod.connect(mg); car2.connect(g2);
     const tine = ctx.createOscillator(); tine.type = 'sine'; tine.frequency.value = f * 7; const tg = ctx.createGain();
     tg.gain.setValueAtTime(0.09 * vel * (midi > 72 ? 0.5 : 1), t0); tg.gain.exponentialRampToValueAtTime(0.0005, t0 + 0.09);
     const bell = ctx.createOscillator(); bell.type = 'sine'; bell.frequency.value = f * 4; const bg = ctx.createGain();
@@ -102,9 +106,9 @@ const Audio = (() => {
     // tremolo (suitcase vibrato), gentle
     const lfo = ctx.createOscillator(); lfo.frequency.value = 4.6; const lg = ctx.createGain(); lg.gain.value = 0.10; const trem = ctx.createGain(); trem.gain.value = 1;
     lfo.connect(lg).connect(trem.gain);
-    car.connect(amp); tine.connect(tg).connect(amp); bell.connect(bg).connect(amp);
+    car.connect(amp); g2.connect(amp); tine.connect(tg).connect(amp); bell.connect(bg).connect(amp);
     amp.connect(lp).connect(trem).connect(out).connect(master); out.gain.value = 1;
-    [car, mod, tine, bell, lfo].forEach(o => { o.start(t0); o.stop(t0 + dur + 0.45); });
+    [car, car2, mod, tine, bell, lfo].forEach(o => { o.start(t0); o.stop(t0 + dur + 0.45); });
   }
   function synthTone(midi, dur, t0, vel = 0.6) {
     const f = 440 * Math.pow(2, (midi - 69) / 12);
