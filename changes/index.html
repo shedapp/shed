@@ -127,6 +127,7 @@ h3{margin:0;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:v
 .bigbtn svg.ring{position:absolute;inset:-14px;width:calc(100% + 28px);height:calc(100% + 28px);pointer-events:none}
 .bigbtn svg.ring path{transition:opacity .12s}
 .bigbtn .sub{font-size:12px;color:var(--muted)}
+.midikeys{width:100%;height:40px;display:block;border-radius:6px;background:var(--panel2)}
 .pad{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
 .pad button{padding:8px 2px;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-family:var(--display);font-weight:600;font-size:16px;letter-spacing:-.01em;border-radius:12px;position:relative;overflow:hidden}
 .pad button small{font-family:var(--mono);font-size:10px;color:var(--muted);font-weight:500}
@@ -276,6 +277,7 @@ kbd{font-family:var(--mono);background:var(--panel2);border:1px solid var(--line
             <span class="sub" id="midiSub">USB or Bluetooth keyboard</span>
           </button>
           <div class="hint" id="midiHint">Exact notes, instant. Hold a chord and it is read with its inversion; lift, play the next.</div>
+          <canvas id="midiKeys" class="midikeys" height="40" aria-label="Notes the keyboard is sending"></canvas>
           <button class="primary" id="midiDone" title="Keep the take as played: chords, melody, rhythm and comping">Finish take</button>
         </div>
         <div id="tapWrap" hidden style="display:flex;flex-direction:column;gap:10px">
@@ -2917,9 +2919,11 @@ const Audio = (() => {
     MIDI.access.onstatechange = hook; hook(); MIDI.active = true; takeStart();
     return true;
   }
+  function midiInject(bytes) { if (!MIDI.take) takeStart(); MIDI.active = true; onMidi({ data: bytes }); }
   function midiStop() { if (MIDI.access) MIDI.inputs.forEach(i => i.onmidimessage = null); MIDI.active = false; MIDI.held.clear(); MIDI.sustained.clear(); }
   function onMidi(e) {
     const [st, d1, d2] = e.data; const type = st & 0xf0;
+    if (MIDI.onNotes && (type === 0x90 || type === 0x80)) setTimeout(() => MIDI.onNotes([...(MIDI.pedal ? MIDI.sustained : MIDI.held.keys())]), 0);
     if (type === 0x90 && d2 > 0) { takeEvent(d1, d2, true); MIDI.held.set(d1, d2); MIDI.sustained.add(d1); evalMidi(true, d1); }
     else if (type === 0x80 || (type === 0x90 && d2 === 0)) { takeEvent(d1, 0, false); MIDI.held.delete(d1); if (!MIDI.pedal) MIDI.sustained.delete(d1); evalMidi(false); }
     else if (type === 0xb0 && d1 === 64) { const down = d2 >= 64; takeEvent(-1, d2, down); if (MIDI.pedal && !down) { MIDI.sustained = new Set(MIDI.held.keys()); } MIDI.pedal = down; evalMidi(false); }
@@ -3067,7 +3071,7 @@ const Audio = (() => {
     MIC.stream = null;
   }
 
-  return { ensureCtx, unmuteIOS, setTone, SOUND, takeStart, takeNotes, playTake, get ctx() { return ctx; }, pianoInit, pianoPreload, playTone, playNotes, play, stop, PLAYER, PIANO, midiStart, midiStop, MIDI, micStart, micStop, MIC, matchChroma };
+  return { ensureCtx, unmuteIOS, setTone, SOUND, takeStart, takeNotes, playTake, get ctx() { return ctx; }, pianoInit, pianoPreload, playTone, playNotes, play, stop, PLAYER, PIANO, midiStart, midiStop, midiInject, MIDI, micStart, micStop, MIC, matchChroma };
 })();
 if (typeof module !== 'undefined') module.exports = Audio;
 
@@ -3311,7 +3315,7 @@ if (typeof module !== 'undefined') module.exports = Sync;
   const T = Theory, M = Mood, R = Reharm, V = Voicing, A = Audio;
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  const BUILD = '2610191948';
+  const BUILD = '2610192007';
 
   // ---------- state ----------
   const DEFAULTS = { symbols: 'plain', twoHands: false, span: 'default', sound: true, tone: 'grand', feel: 'hold', bpm: 76, look: 'night', fingers: false, instrument: 'piano', styles: ['neosoul', 'gospel'] };
@@ -3510,7 +3514,16 @@ if (typeof module !== 'undefined') module.exports = Sync;
   }
   $('listenBtn').addEventListener('click', () => { if (A.MIC.active) stopMic(); else startMic(); });
 
-  // MIDI
+  // MIDI: a live keyboard that shows every note the keyboard sends
+  function drawHeld(held) {
+    const cv = $('midiKeys'); if (!cv) return; const ctx2 = cv.getContext('2d'); const W = cv.width = cv.clientWidth * 2, H = cv.height = cv.clientHeight * 2;
+    const lo = 21, hi = 108; const whites = []; for (let n = lo; n <= hi; n++) if (![1, 3, 6, 8, 10].includes(n % 12)) whites.push(n);
+    const w = W / whites.length; ctx2.clearRect(0, 0, W, H);
+    const x = {}; whites.forEach((n, i) => x[n] = i * w); for (let n = lo; n <= hi; n++) if ([1, 3, 6, 8, 10].includes(n % 12)) x[n] = x[n - 1] + w * 0.62;
+    const set = new Set(held);
+    for (const n of whites) { ctx2.fillStyle = set.has(n) ? '#f2b544' : '#ebe9e3'; ctx2.fillRect(x[n] + 1, 0, w - 2, H); }
+    for (let n = lo; n <= hi; n++) if ([1, 3, 6, 8, 10].includes(n % 12)) { ctx2.fillStyle = set.has(n) ? '#f2b544' : '#20232c'; ctx2.fillRect(x[n] - w * 0.3, 0, w * 0.6, H * 0.62); }
+  }
   async function startMidi() {
     const ok = await A.midiStart({
       onStatus: (st) => {
@@ -3518,8 +3531,9 @@ if (typeof module !== 'undefined') module.exports = Sync;
         $('midiSub').textContent = st.inputs.length ? st.inputs.join(', ') : 'no keyboard found — plug one in';
         $('midiHint').textContent = st.inputs.length ? 'Hold a chord; lift and play the next. Pedal down keeps the chord.' : 'Connect a USB or Bluetooth keyboard. It appears here automatically.';
       },
-      onLive: (c, notes) => { const el = $('midiLive'); if (!c) { el.textContent = '—'; $('midiSub').textContent = 'listening'; return; } el.innerHTML = chordInner(c); el.style.color = M.css(moodOf(c, S.key), 8); $('midiSub').textContent = c.melody && c.melody.length ? 'melody: ' + c.melody.map(m => T.pcName(m.note % 12, S.key)).join(' ') : notes.map(n => T.pcName(n % 12, S.key)).join(' '); },
-      onChord: (c, ms) => { addChord(Object.assign({}, c, { beats: 4, ms, src: 'midi' })); const notes = A.takeNotes(); if (notes.length) S.take = { notes, at: Date.now() }; },
+      onLive: (c, notes) => { drawHeld(notes || []); const el = $('midiLive'); if (!c) { el.textContent = '—'; $('midiSub').textContent = 'listening'; return; } el.innerHTML = chordInner(c); el.style.color = M.css(moodOf(c, S.key), 8); $('midiSub').textContent = c.melody && c.melody.length ? 'melody: ' + c.melody.map(m => T.pcName(m.note % 12, S.key)).join(' ') : notes.map(n => T.pcName(n % 12, S.key)).join(' '); },
+      onChord: (c, ms) => { addChord(Object.assign({}, c, { beats: 4, ms, src: 'midi' })); const notes = A.takeNotes(); if (notes.length) { S.take = { notes, at: Date.now() }; S.settings.feel = 'asPlayed'; } $('midiSub').textContent = `take: ${notes.length} notes`; save(); },
+      onNotes: (held) => drawHeld(held),
     });
     if (ok) $('midiLbl').textContent = 'Reading';
   }
@@ -3556,7 +3570,7 @@ if (typeof module !== 'undefined') module.exports = Sync;
   function addChord(c, quiet) {
     // merge an immediate repeat of the same chord into a longer one (the mic often re-hears a held chord)
     const L = S.prog[S.prog.length - 1];
-    if (L && c.src !== 'tap' && c.src !== 'type' && T.sameChord(L, c) && L.src === c.src) { L.ms = (L.ms || 0) + (c.ms || 0); if (!quiet) renderHeard(); return; }
+    if (L && c.src !== 'tap' && c.src !== 'type' && T.sameChord(L, c) && L.src === c.src) { L.ms = (L.ms || 0) + (c.ms || 0); if (c.span && L.span) L.span.end = c.span.end; if (c.melody && c.melody.length) L.melody = (L.melody || []).concat(c.melody.map(m => typeof m === 'number' ? m : m.note)); if (!quiet) renderHeard(); return; }
     const melody = c.melody && c.melody.length ? c.melody.map(m => typeof m === 'number' ? m : m.note) : undefined;
     S.prog.push({ root: c.root, q: c.q, bass: c.bass ?? null, beats: c.beats || 4, ms: c.ms, conf: c.conf, src: c.src, melody, notes: c.notes, span: c.span, alts: c.alts });
     if (!S.keyLocked) detectKey();

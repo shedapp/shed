@@ -202,7 +202,16 @@
   }
   $('listenBtn').addEventListener('click', () => { if (A.MIC.active) stopMic(); else startMic(); });
 
-  // MIDI
+  // MIDI: a live keyboard that shows every note the keyboard sends
+  function drawHeld(held) {
+    const cv = $('midiKeys'); if (!cv) return; const ctx2 = cv.getContext('2d'); const W = cv.width = cv.clientWidth * 2, H = cv.height = cv.clientHeight * 2;
+    const lo = 21, hi = 108; const whites = []; for (let n = lo; n <= hi; n++) if (![1, 3, 6, 8, 10].includes(n % 12)) whites.push(n);
+    const w = W / whites.length; ctx2.clearRect(0, 0, W, H);
+    const x = {}; whites.forEach((n, i) => x[n] = i * w); for (let n = lo; n <= hi; n++) if ([1, 3, 6, 8, 10].includes(n % 12)) x[n] = x[n - 1] + w * 0.62;
+    const set = new Set(held);
+    for (const n of whites) { ctx2.fillStyle = set.has(n) ? '#f2b544' : '#ebe9e3'; ctx2.fillRect(x[n] + 1, 0, w - 2, H); }
+    for (let n = lo; n <= hi; n++) if ([1, 3, 6, 8, 10].includes(n % 12)) { ctx2.fillStyle = set.has(n) ? '#f2b544' : '#20232c'; ctx2.fillRect(x[n] - w * 0.3, 0, w * 0.6, H * 0.62); }
+  }
   async function startMidi() {
     const ok = await A.midiStart({
       onStatus: (st) => {
@@ -210,8 +219,9 @@
         $('midiSub').textContent = st.inputs.length ? st.inputs.join(', ') : 'no keyboard found — plug one in';
         $('midiHint').textContent = st.inputs.length ? 'Hold a chord; lift and play the next. Pedal down keeps the chord.' : 'Connect a USB or Bluetooth keyboard. It appears here automatically.';
       },
-      onLive: (c, notes) => { const el = $('midiLive'); if (!c) { el.textContent = '—'; $('midiSub').textContent = 'listening'; return; } el.innerHTML = chordInner(c); el.style.color = M.css(moodOf(c, S.key), 8); $('midiSub').textContent = c.melody && c.melody.length ? 'melody: ' + c.melody.map(m => T.pcName(m.note % 12, S.key)).join(' ') : notes.map(n => T.pcName(n % 12, S.key)).join(' '); },
-      onChord: (c, ms) => { addChord(Object.assign({}, c, { beats: 4, ms, src: 'midi' })); const notes = A.takeNotes(); if (notes.length) S.take = { notes, at: Date.now() }; },
+      onLive: (c, notes) => { drawHeld(notes || []); const el = $('midiLive'); if (!c) { el.textContent = '—'; $('midiSub').textContent = 'listening'; return; } el.innerHTML = chordInner(c); el.style.color = M.css(moodOf(c, S.key), 8); $('midiSub').textContent = c.melody && c.melody.length ? 'melody: ' + c.melody.map(m => T.pcName(m.note % 12, S.key)).join(' ') : notes.map(n => T.pcName(n % 12, S.key)).join(' '); },
+      onChord: (c, ms) => { addChord(Object.assign({}, c, { beats: 4, ms, src: 'midi' })); const notes = A.takeNotes(); if (notes.length) { S.take = { notes, at: Date.now() }; S.settings.feel = 'asPlayed'; } $('midiSub').textContent = `take: ${notes.length} notes`; save(); },
+      onNotes: (held) => drawHeld(held),
     });
     if (ok) $('midiLbl').textContent = 'Reading';
   }
@@ -248,7 +258,7 @@
   function addChord(c, quiet) {
     // merge an immediate repeat of the same chord into a longer one (the mic often re-hears a held chord)
     const L = S.prog[S.prog.length - 1];
-    if (L && c.src !== 'tap' && c.src !== 'type' && T.sameChord(L, c) && L.src === c.src) { L.ms = (L.ms || 0) + (c.ms || 0); if (!quiet) renderHeard(); return; }
+    if (L && c.src !== 'tap' && c.src !== 'type' && T.sameChord(L, c) && L.src === c.src) { L.ms = (L.ms || 0) + (c.ms || 0); if (c.span && L.span) L.span.end = c.span.end; if (c.melody && c.melody.length) L.melody = (L.melody || []).concat(c.melody.map(m => typeof m === 'number' ? m : m.note)); if (!quiet) renderHeard(); return; }
     const melody = c.melody && c.melody.length ? c.melody.map(m => typeof m === 'number' ? m : m.note) : undefined;
     S.prog.push({ root: c.root, q: c.q, bass: c.bass ?? null, beats: c.beats || 4, ms: c.ms, conf: c.conf, src: c.src, melody, notes: c.notes, span: c.span, alts: c.alts });
     if (!S.keyLocked) detectKey();

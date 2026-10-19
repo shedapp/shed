@@ -233,9 +233,11 @@ const Audio = (() => {
     MIDI.access.onstatechange = hook; hook(); MIDI.active = true; takeStart();
     return true;
   }
+  function midiInject(bytes) { if (!MIDI.take) takeStart(); MIDI.active = true; onMidi({ data: bytes }); }
   function midiStop() { if (MIDI.access) MIDI.inputs.forEach(i => i.onmidimessage = null); MIDI.active = false; MIDI.held.clear(); MIDI.sustained.clear(); }
   function onMidi(e) {
     const [st, d1, d2] = e.data; const type = st & 0xf0;
+    if (MIDI.onNotes && (type === 0x90 || type === 0x80)) setTimeout(() => MIDI.onNotes([...(MIDI.pedal ? MIDI.sustained : MIDI.held.keys())]), 0);
     if (type === 0x90 && d2 > 0) { takeEvent(d1, d2, true); MIDI.held.set(d1, d2); MIDI.sustained.add(d1); evalMidi(true, d1); }
     else if (type === 0x80 || (type === 0x90 && d2 === 0)) { takeEvent(d1, 0, false); MIDI.held.delete(d1); if (!MIDI.pedal) MIDI.sustained.delete(d1); evalMidi(false); }
     else if (type === 0xb0 && d1 === 64) { const down = d2 >= 64; takeEvent(-1, d2, down); if (MIDI.pedal && !down) { MIDI.sustained = new Set(MIDI.held.keys()); } MIDI.pedal = down; evalMidi(false); }
@@ -383,6 +385,6 @@ const Audio = (() => {
     MIC.stream = null;
   }
 
-  return { ensureCtx, unmuteIOS, setTone, SOUND, takeStart, takeNotes, playTake, get ctx() { return ctx; }, pianoInit, pianoPreload, playTone, playNotes, play, stop, PLAYER, PIANO, midiStart, midiStop, MIDI, micStart, micStop, MIC, matchChroma };
+  return { ensureCtx, unmuteIOS, setTone, SOUND, takeStart, takeNotes, playTake, get ctx() { return ctx; }, pianoInit, pianoPreload, playTone, playNotes, play, stop, PLAYER, PIANO, midiStart, midiStop, midiInject, MIDI, micStart, micStop, MIC, matchChroma };
 })();
 if (typeof module !== 'undefined') module.exports = Audio;
