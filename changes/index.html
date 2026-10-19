@@ -3081,7 +3081,7 @@ if (typeof module !== 'undefined') module.exports = Sync;
   const T = Theory, M = Mood, R = Reharm, V = Voicing, A = Audio;
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  const BUILD = '2610191708';
+  const BUILD = '2610191709';
 
   // ---------- state ----------
   const DEFAULTS = { symbols: 'plain', twoHands: false, span: 'default', sound: true, tone: 'grand', feel: 'hold', bpm: 76, look: 'night', fingers: false, instrument: 'piano', styles: ['neosoul', 'gospel'] };
@@ -3633,8 +3633,12 @@ if (typeof module !== 'undefined') module.exports = Sync;
     }
     return lines.join('\n');
   }
-  function downloadFile(name, data, mime) {
+  async function downloadFile(name, data, mime) {
     try {
+      if (window.claude && window.claude.use) { // inside the claude.ai viewer: files go through its own save prompt
+        const dl = await window.claude.use('downloads');
+        if (dl) { if (/\.mid$/.test(name)) { toast('MIDI files can only be saved from the installed app or the web link'); return; } await dl.save({ filename: name, data: new Blob([data], { type: mime }) }); return; }
+      }
       const blob = data instanceof Uint8Array ? new Blob([data], { type: mime }) : new Blob([data], { type: mime });
       const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 2000);
       toast(`${name} saved`);

@@ -555,8 +555,12 @@
     }
     return lines.join('\n');
   }
-  function downloadFile(name, data, mime) {
+  async function downloadFile(name, data, mime) {
     try {
+      if (window.claude && window.claude.use) { // inside the claude.ai viewer: files go through its own save prompt
+        const dl = await window.claude.use('downloads');
+        if (dl) { if (/\.mid$/.test(name)) { toast('MIDI files can only be saved from the installed app or the web link'); return; } await dl.save({ filename: name, data: new Blob([data], { type: mime }) }); return; }
+      }
       const blob = data instanceof Uint8Array ? new Blob([data], { type: mime }) : new Blob([data], { type: mime });
       const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 2000);
       toast(`${name} saved`);
