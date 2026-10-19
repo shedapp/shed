@@ -256,29 +256,40 @@ const Audio = (() => {
       if (onset) {
         const struck = MIDI.cluster.slice().sort((a, b) => a - b);
         const cur = MIDI.current;
-        if (struck.length === 1 && cur && held.length >= 3) {
-          const n = struck[0];
-          const core = cur.chord.notes;
-          const isMelody = n > core[core.length - 1] - 3 || !T.chordPcs(cur.chord).includes(mod(n, 12));
-          // a single note on top while the chord still sounds: melody, unless the held set now spells a new chord with it as bass
-          const id = T.identify(held);
-          if (isMelody && id && id.root === cur.chord.root && id.q === cur.chord.q) { cur.chord.melody = (cur.chord.melody || []).concat([{ note: n, at: t - MIDI.currentSince }]); MIDI.onLive && MIDI.onLive(cur.chord, held); return; }
-          if (isMelody && n > core[core.length - 1]) { cur.chord.melody = (cur.chord.melody || []).concat([{ note: n, at: t - MIDI.currentSince }]); MIDI.onLive && MIDI.onLive(cur.chord, held); return; }
+        // Two layers. Notes already flagged as melody stay melody while they sound; a melody flag is dropped on release.
+        MIDI.melSet = MIDI.melSet || new Set();
+        for (const n of [...MIDI.melSet]) if (!held.includes(n)) MIDI.melSet.delete(n);
+        let harm = held.filter(n => !MIDI.melSet.has(n));
+        const newMel = [];
+        const flagMel = (n) => { MIDI.melSet.add(n); newMel.push(n); harm = harm.filter(x => x !== n); };
+        // (1) the top note, just struck and sitting clear of the rest (a 4th or more), is melody over the chord
+        if (harm.length >= 3) { const top = harm[harm.length - 1], next = harm[harm.length - 2]; if (struck.includes(top) && top - next >= 5) flagMel(top); }
+        // (2) over a sounding chord, a lone note above its top, or a non-chord tone near its top, is melody
+        if (cur && struck.length === 1 && harm.includes(struck[0]) && harm.length >= 3) {
+          const n = struck[0], core = cur.chord.notes, coreTop = core[core.length - 1];
+          if (n > coreTop || (n > coreTop - 3 && !T.chordPcs(cur.chord).includes(mod(n, 12)))) flagMel(n);
         }
-        // a single note with no chord under it: melody over the chord just committed (lifted hands, still singing)
+        // (3) a single note with no chord under it: melody over the chord just committed (hands lifted, still singing)
         if (struck.length === 1 && !cur && MIDI.lastCommitted && t - MIDI.lastCommittedAt < 2500 && held.length < 2) { MIDI.onMelody && MIDI.onMelody(struck[0]); MIDI.onLive && MIDI.onLive(null, held); return; }
-        const notes = held.length >= 2 ? held : struck;
-        if (notes.length >= 2) {
-          const id = T.identify(notes, { rootless: notes.length >= 4 });
+        const attach = (chord) => { for (const n of newMel) chord.melody = (chord.melody || []).concat([{ note: n, at: t - MIDI.currentSince }]); };
+        // (4) the harmony layer: re-strikes, inversions and subsets of the sounding chord are comping, not a new chord
+        if (cur) {
+          const curPcs = new Set(T.chordPcs(cur.chord)); if (cur.chord.bass != null) curPcs.add(cur.chord.bass);
+          const sub = harm.length && harm.every(n => curPcs.has(mod(n, 12)));
+          if (sub) { attach(cur.chord); if (harm[harm.length - 1] > cur.chord.notes[cur.chord.notes.length - 1]) cur.chord.notes = harm.slice(); MIDI.onLive && MIDI.onLive(cur.chord, held); return; }
+        }
+        if (harm.length >= 2) {
+          const id = T.identify(harm, { rootless: harm.length >= 4 });
           if (id) {
             const label = `${id.root}:${id.q}:${id.bass ?? ''}`;
             if (!cur || cur.label !== label) {
               if (cur && t - MIDI.currentSince > 200 && MIDI.onChord) { cur.chord.span = { start: MIDI.currentSince - MIDI.take.t0, end: t - MIDI.take.t0 }; MIDI.lastCommitted = cur.chord; MIDI.lastCommittedAt = t; MIDI.onChord(cur.chord, t - MIDI.currentSince); }
-              MIDI.current = { label, chord: Object.assign({}, id, { notes: notes.slice(), melody: [] }) }; MIDI.currentSince = t;
+              MIDI.current = { label, chord: Object.assign({}, id, { notes: harm.slice(), melody: [] }) }; MIDI.currentSince = t;
             }
+            attach(MIDI.current.chord);
             MIDI.onLive && MIDI.onLive(MIDI.current.chord, held);
           }
-        }
+        } else if (cur && newMel.length) { attach(cur.chord); MIDI.onLive && MIDI.onLive(cur.chord, held); }
       } else if (held.length === 0 && MIDI.current) {
         if (t - MIDI.currentSince > 200 && MIDI.onChord) { MIDI.current.chord.span = { start: MIDI.currentSince - MIDI.take.t0, end: t - MIDI.take.t0 }; MIDI.lastCommitted = MIDI.current.chord; MIDI.lastCommittedAt = t; MIDI.onChord(MIDI.current.chord, t - MIDI.currentSince); }
         MIDI.current = null; MIDI.onLive && MIDI.onLive(null, []);

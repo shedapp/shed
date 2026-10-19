@@ -3,7 +3,7 @@
   const T = Theory, M = Mood, R = Reharm, V = Voicing, A = Audio;
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  const BUILD = 'v0.7.2';
+  const BUILD = 'v0.7.3';
 
   // ---------- state ----------
   const DEFAULTS = { symbols: 'plain', twoHands: false, span: 'default', sound: true, tone: 'grand', feel: 'hold', bpm: 76, look: 'night', fingers: false, instrument: 'piano', styles: ['neosoul', 'gospel'] };
@@ -68,42 +68,63 @@
     const v = V.voiceProgression([c], S.key, S.style, { span: S.settings.span })[0];
     A.playNotes(v.all, dur);
   }
-  // Mark which take notes are melody: notes the reader flagged as melody, plus lone onsets above the harmony.
-  function takeWithRoles() {
-    if (!S.take || !S.take.notes) return null;
-    if (S.take.roles) return S.take.roles;
-    const notes = S.take.notes.map(n => Object.assign({}, n));
-    const mel = new Set();
-    for (const c of S.prog) if (c.melody && c.span) for (const m of c.melody) { const at = typeof m === 'number' ? null : m.at; for (const n of notes) if (n.n === (typeof m === 'number' ? m : m.note) && (at == null ? (n.at >= c.span.start - 30 && n.at < c.span.end + 30) : Math.abs(n.at - (c.span.start + at)) < 80)) mel.add(n); }
-    // lone onsets (no other note struck within 40 ms) above the highest simultaneous harmony are melody too
-    notes.forEach((n, i) => { const together = notes.filter(o => o !== n && Math.abs(o.at - n.at) < 40); if (!together.length) { const under = notes.filter(o => o !== n && o.at <= n.at && o.at + o.dur > n.at && !mel.has(o)); if (under.length && n.n > Math.max(...under.map(o => o.n))) mel.add(n); } });
-    notes.forEach(n => n.mel = mel.has(n));
-    S.take.roles = notes; return notes;
+  // Split the take into two layers: the melodic line (top voice, kept note for note) and the comping rhythm
+  // (when and how hard chords were struck). Options then play their own clean, voice-led chords in that rhythm
+  // under that melody; no single played note is ever re-pitched.
+  function takeLayers() {
+    if (!S.take || !S.take.notes || !S.take.notes.length) return null;
+    if (S.take.layers) return S.take.layers;
+    const notes = S.take.notes.slice().sort((a, b) => a.at - b.at);
+    // onset clusters (notes struck within 45 ms belong to one strike)
+    const strikes = [];
+    for (const n of notes) { const st = strikes[strikes.length - 1]; if (st && n.at - st.at < 45) st.notes.push(n); else strikes.push({ at: n.at, notes: [n] }); }
+    const mel = new Set(); let lastMel = null;
+    const soundingAt = (t, except) => notes.filter(o => !except.includes(o) && o.at <= t && o.at + o.dur > t && !mel.has(o));
+    for (const st of strikes) {
+      const sorted = st.notes.slice().sort((a, b) => a.n - b.n); const top = sorted[sorted.length - 1];
+      const under = soundingAt(st.at, st.notes); const harmTop = under.length ? Math.max(...under.map(o => o.n)) : -1;
+      if (sorted.length === 1) {
+        // a lone note above the harmony, or one continuing a line just sung, is melody
+        const cont = lastMel && st.at - (lastMel.at + lastMel.dur) < 700 && Math.abs(top.n - lastMel.n) <= 7;
+        if (top.n > harmTop || (cont && top.n > harmTop - 3)) { mel.add(top); lastMel = top; }
+      } else if (sorted.length >= 2) {
+        // a chord struck with the melody on top: the top note is melody when it sits clear of the rest or continues the line
+        const next = sorted[sorted.length - 2];
+        const cont = lastMel && st.at - (lastMel.at + lastMel.dur) < 700 && Math.abs(top.n - lastMel.n) <= 7;
+        if (top.n - next.n >= 5 || (cont && top.n - next.n >= 3)) { mel.add(top); lastMel = top; }
+      }
+    }
+    const harmony = strikes.map(st => { const hn = st.notes.filter(n => !mel.has(n)); if (!hn.length) return null; return { at: st.at, n: hn.length, dur: Math.max(...hn.map(n => n.dur)), vel: hn.reduce((a, n) => a + n.v, 0) / hn.length, low: Math.min(...hn.map(n => n.n)), hi: Math.max(...hn.map(n => n.n)) }; }).filter(Boolean);
+    const melody = notes.filter(n => mel.has(n));
+    const harmNotes = notes.filter(n => !mel.has(n)).map(n => n.n).sort((a, b) => a - b);
+    const center = harmNotes.length ? harmNotes[Math.floor(harmNotes.length / 2)] : null;
+    const lows = harmony.filter(h => h.n >= 2).map(h => h.low).sort((a, b) => a - b); const low = lows.length ? lows[Math.floor(lows.length / 2)] : null;
+    S.take.layers = { melody, harmony, center, low, t0: notes[0].at, t1: Math.max(...notes.map(n => n.at + n.dur)) };
+    return S.take.layers;
   }
-  const nearestTone = (n, pcs, prefer) => { let best = null, bd = 99; for (let d = -6; d <= 6; d++) { const m = n + d; if (!pcs.includes(((m % 12) + 12) % 12)) continue; const dist = Math.abs(d) + (d > 0 ? 0.1 : 0); if (dist < bd) { bd = dist; best = m; } } return best == null ? n : best; };
   function progItems(prog, key, style) {
-    const vs = V.voiceProgression(prog, key, style, { span: S.settings.span });
-    const take = S.settings.feel === 'asPlayed' ? takeWithRoles() : null;
+    const L = S.settings.feel === 'asPlayed' ? takeLayers() : null;
     const spanned = S.prog.filter(c => c.span);
-    if (!take || !take.length || !spanned.length) return vs.map((v, i) => ({ notes: v.all, beats: prog[i].beats || 4 }));
-    // the take's timeline, cut into the option's chords in proportion to their beats
-    const t0 = Math.min(...spanned.map(c => c.span.start), ...take.map(n => n.at)), t1 = Math.max(...spanned.map(c => c.span.end), ...take.map(n => n.at + n.dur));
-    const totalBeats = prog.reduce((a, c) => a + (c.beats || 4), 0); const msPerBeat = (t1 - t0) / totalBeats;
+    const vs = V.voiceProgression(prog, key, style, { span: S.settings.span, center: L && L.center != null ? Math.max(58, Math.min(72, L.center + 4)) : undefined });
+    if (!L || !spanned.length) return vs.map((v, i) => ({ notes: v.all, beats: prog[i].beats || 4 }));
+    const t0 = Math.min(L.t0, ...spanned.map(c => c.span.start)), t1 = Math.max(L.t1, ...spanned.map(c => c.span.end));
+    const totalBeats = prog.reduce((a, c) => a + (c.beats || 4), 0); const mpb = (t1 - t0) / totalBeats;
+    const V127 = (v) => Math.min(1, 0.2 + v / 127 * 0.8);
     let b = 0;
     return vs.map((v, i) => {
-      const c = prog[i]; const beats = c.beats || 4; const w0 = t0 + b * msPerBeat, w1 = t0 + (b + beats) * msPerBeat; b += beats;
-      const inWin = take.filter(n => (i === 0 || n.at >= w0 - 25) && (i === vs.length - 1 || n.at < w1 - 25));
-      const item = { notes: v.all, beats };
-      if (!inWin.length) return item;
-      const orig = S.prog.find(o => o.span && o.span.start <= w0 + 25 && o.span.end > w0 + 25);
-      const same = orig && T.sameChord(orig, c);
-      const pcs = T.chordPcs(c); const bassPc = c.bass != null ? c.bass : c.root;
-      // strikes: harmony notes struck together; the lowest of a strike is the bass and goes to the chord's bass tone
-      const strikes = []; inWin.filter(n => !n.mel).sort((x, y) => x.at - y.at).forEach(n => { const st = strikes.find(s => Math.abs(s.at - n.at) < 40); if (st) st.notes.push(n); else strikes.push({ at: n.at, notes: [n] }); });
+      const c = prog[i]; const beats = c.beats || 4; const w0 = t0 + b * mpb, w1 = t0 + (b + beats) * mpb; b += beats;
+      const first = i === 0, last = i === vs.length - 1;
+      const inWin = (t) => (first || t >= w0 - 20) && (last || t < w1 - 20);
       const ev = [];
-      for (const st of strikes) { const sorted = st.notes.slice().sort((x, y) => x.n - y.n); sorted.forEach((n, k) => { const pitch = same ? n.n : (k === 0 && sorted.length > 1 ? nearestTone(n.n, [bassPc]) : nearestTone(n.n, pcs)); ev.push({ at: (n.at - w0) / msPerBeat, dur: Math.max(0.05, n.dur / msPerBeat), notes: [pitch], vel: Math.min(1, 0.2 + n.v / 127 * 0.8) }); }); }
-      for (const n of inWin.filter(x => x.mel)) ev.push({ at: (n.at - w0) / msPerBeat, dur: Math.max(0.05, n.dur / msPerBeat), notes: [n.n], vel: Math.min(1, 0.2 + n.v / 127 * 0.8) });
-      item.events = ev;
+      // the player's comping rhythm with the option's voicing: full voicing for a chord strike, bass alone for a single low note
+      const rh = v.rh.slice(); let lh = v.lh.slice();
+      if (L.low != null && lh.length) { while (lh[0] < L.low - 6 && lh[lh.length - 1] + 12 < rh[0]) lh = lh.map(n => n + 12); while (lh[0] > L.low + 6 && lh[0] - 12 >= 28) lh = lh.map(n => n - 12); }
+      const all = lh.concat(rh);
+      for (const h of L.harmony) { if (!inWin(h.at)) continue; const notes = h.n >= 2 ? all : (h.low < (lh[0] || 60) + 7 ? [lh[0]] : rh); ev.push({ at: (h.at - w0) / mpb, dur: Math.max(0.08, h.dur / mpb), notes, vel: V127(h.vel) }); }
+      // the melody, note for note
+      for (const m of L.melody) { if (!inWin(m.at)) continue; ev.push({ at: (m.at - w0) / mpb, dur: Math.max(0.05, m.dur / mpb), notes: [m.n], vel: V127(Math.min(127, m.v + 6)) }); }
+      const item = { notes: all, beats };
+      if (ev.length) item.events = ev;
       return item;
     });
   }

@@ -1,5 +1,5 @@
 // Changes service worker: app shell network-first (updates arrive on the next open), piano samples and icons cache-first.
-const BUILD = '2610192024';
+const BUILD = '2610192035';
 const SHELL = 'changes-shell-' + BUILD, MEDIA = 'changes-media-v1';
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(SHELL).then(c => c.addAll(['./', './index.html', './manifest.webmanifest']).catch(() => {}))); self.skipWaiting(); });
 self.addEventListener('activate', (e) => {

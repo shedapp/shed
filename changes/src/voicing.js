@@ -120,12 +120,12 @@ const Voicing = (() => {
     const meanD = Math.abs(a.reduce((s, v) => s + v, 0) / a.length - b.reduce((s, v) => s + v, 0) / b.length); cost += meanD * 0.3;
     return cost;
   }
-  function rangeCost(rh, span, want) {
+  function rangeCost(rh, span, want, center = 67) {
     let c = 0; const lo = rh[0], hi = rh[rh.length - 1];
     if (want && rh.length < want) c += (want - rh.length) * 1.2;
     if (hi > 81) c += (hi - 81) * 0.8; if (lo < 55) c += (55 - lo) * 0.8;
     const width = hi - lo; const max = span === 'small' ? 14 : 16; if (width > max) c += (width - max) * 2;
-    const center = (lo + hi) / 2; c += Math.abs(center - 67) * 0.08;
+    const mid = (lo + hi) / 2; c += Math.abs(mid - center) * (center === 67 ? 0.08 : 0.2);
     return c;
   }
 
@@ -140,7 +140,7 @@ const Voicing = (() => {
       const mel = chord.melody && chord.melody.length ? chord.melody.map(m => typeof m === 'number' ? m : m.note) : null;
       const ceiling = mel ? Math.min(...mel) : null;
       for (const rh of cands) {
-        let c = motionCost(prevRH, rh) + rangeCost(rh, opts.span, want);
+        let c = motionCost(prevRH, rh) + rangeCost(rh, opts.span, want, opts.center);
         if (ceiling != null) { const top = rh[rh.length - 1]; if (top > ceiling) c += (top - ceiling) * 1.5 + 3; const gap = ceiling - top; if (gap > 10) c += (gap - 10) * 0.4; }
         if (c < bestCost) { bestCost = c; best = rh; }
       }
