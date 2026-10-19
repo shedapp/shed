@@ -982,14 +982,23 @@ const Reharm = (() => {
     const inSig = sig(prog);
     const seen = new Set();
     all = all.filter(o => { const k = sig(o.prog); if (k === inSig || seen.has(k)) return false; seen.add(k); return true; });
-    // readings and scores
+    // readings and scores; a melody the writer played over a chord must still fit the chord that replaces it
+    const fitsMelody = (c) => {
+      if (!c.melody || !c.melody.length) return true;
+      const pcs = T.chordPcs(c); const k = cat(c);
+      const ok = k === 'min' ? [2, 5, 9] : k === 'maj' ? [2, 6, 9] : k === 'dom' ? [1, 2, 3, 6, 8, 9] : k === 'sus' ? [2, 9] : [2];
+      return c.melody.every(n => pcs.includes(mod(n, 12)) || ok.includes(mod(n - c.root, 12)));
+    };
     all.forEach(o => {
       o.mood = M.progressionMood(o.prog, key, style);
       o.roman = o.prog.map(c => c.roman || T.romanNumeral(c, key));
+      o.clashes = o.prog.filter(c => c.changed && !fitsMelody(c)).map(c => sym(c, key));
       let score = o.weight * (1 + 0.35 * (o.depth / depth)); // deeper (within the ask) ranks a little higher
       if (opts.mood) score += 1.6 * M.moodMatch(o.mood.focus || o.mood, opts.mood);
+      if (o.clashes.length) score -= 2.5 * o.clashes.length;
       o.score = score;
     });
+    if (opts.melodyLock) all = all.filter(o => !o.clashes.length);
     all.sort((a, b) => b.score - a.score);
     // diversity: at most two per family
     const count = {}; const picked = [];

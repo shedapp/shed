@@ -41,6 +41,13 @@ const Audio = (() => {
   }
 
   // ---------- Piano ----------
+  const VOICES = new Set(); // every sounding voice: {g: gain, srcs: [nodes], end}
+  function track(g, srcs, end) { const v = { g, srcs, end }; VOICES.add(v); const ms = Math.max(0, (end - ctx.currentTime) * 1000) + 100; setTimeout(() => VOICES.delete(v), ms); return v; }
+  function killVoices() {
+    if (!ctx) return; const now = ctx.currentTime;
+    for (const v of VOICES) { try { v.g.gain.cancelScheduledValues(now); v.g.gain.setValueAtTime(v.g.gain.value, now); v.g.gain.linearRampToValueAtTime(0.0001, now + 0.06); v.srcs.forEach(src => { try { src.stop(now + 0.08); } catch (e) {} }); } catch (e) {} }
+    VOICES.clear();
+  }
   const PIANO = { meta: null, base: null, embedded: null, cache: new Map(), notes: [], ready: false, failed: false, source: 'none' };
   async function pianoInit(opts = {}) {
     PIANO.base = opts.base || null; PIANO.embedded = opts.embedded || null;
@@ -81,7 +88,7 @@ const Audio = (() => {
       src.playbackRate.value = Math.pow(2, (midi - sm) / 12 + ((PIANO.meta[sm] && PIANO.meta[sm].tune) || 0) / 1200);
       const g = ctx.createGain(); const peak = PIANO.source === 'hosted' ? 0.9 : 0.35 + 0.6 * vel;
       g.gain.setValueAtTime(peak, t0); g.gain.setValueAtTime(peak, t0 + dur); g.gain.exponentialRampToValueAtTime(0.001, t0 + dur + 0.45);
-      src.connect(g).connect(master); src.start(Math.max(t0, ctx.currentTime)); src.stop(t0 + dur + 0.5);
+      src.connect(g).connect(master); src.start(Math.max(t0, ctx.currentTime)); src.stop(t0 + dur + 0.5); track(g, [src], t0 + dur + 0.5);
     }).catch(() => synthTone(midi, dur, t0, vel));
   }
   // Electric piano: two-operator FM (a tine over a warm fundamental), a quick hammer click, a slow tremolo.
@@ -108,7 +115,7 @@ const Audio = (() => {
     lfo.connect(lg).connect(trem.gain);
     car.connect(amp); g2.connect(amp); tine.connect(tg).connect(amp); bell.connect(bg).connect(amp);
     amp.connect(lp).connect(trem).connect(out).connect(master); out.gain.value = 1;
-    [car, car2, mod, tine, bell, lfo].forEach(o => { o.start(t0); o.stop(t0 + dur + 0.45); });
+    [car, car2, mod, tine, bell, lfo].forEach(o => { o.start(t0); o.stop(t0 + dur + 0.45); }); track(out, [car, car2, mod, tine, bell, lfo], t0 + dur + 0.45);
   }
   function synthTone(midi, dur, t0, vel = 0.6) {
     const f = 440 * Math.pow(2, (midi - 69) / 12);
@@ -117,7 +124,7 @@ const Audio = (() => {
     const g2 = ctx.createGain(); g2.gain.value = 0.2; o2.connect(g2).connect(lp); o1.connect(lp); lp.connect(g).connect(master);
     const a = 0.12 + 0.2 * vel;
     g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(a, t0 + 0.012); g.gain.exponentialRampToValueAtTime(a * 0.4, t0 + Math.max(0.3, dur * 0.7)); g.gain.exponentialRampToValueAtTime(0.001, t0 + dur + 0.3);
-    o1.start(t0); o2.start(t0); o1.stop(t0 + dur + 0.35); o2.stop(t0 + dur + 0.35);
+    o1.start(t0); o2.start(t0); o1.stop(t0 + dur + 0.35); o2.stop(t0 + dur + 0.35); track(g, [o1, o2], t0 + dur + 0.35);
   }
   // Play a voicing (array of MIDI notes) with a gentle roll
   function playNotes(notes, dur = 1.6, when, vel = 0.62, roll = 0.012) {
@@ -164,8 +171,7 @@ const Audio = (() => {
     const was = PLAYER.playing;
     if (PLAYER.timer) { clearInterval(PLAYER.timer); clearTimeout(PLAYER.timer); PLAYER.timer = null; }
     PLAYER.token++; PLAYER.playing = false;
-    // soften anything already ringing by dipping the master briefly (only when something was actually playing)
-    if (was && !silent && master && ctx) { const g = master.gain; const now = ctx.currentTime; g.cancelScheduledValues(now); g.setValueAtTime(g.value, now); g.linearRampToValueAtTime(0.0001, now + 0.12); g.setValueAtTime(0.9, now + 0.2); }
+    if (!silent) killVoices(); // everything ringing or scheduled is silenced now, not at the end of the bar
   }
 
   // ---------- MIDI ----------
@@ -187,32 +193,50 @@ const Audio = (() => {
   function midiStop() { if (MIDI.access) MIDI.inputs.forEach(i => i.onmidimessage = null); MIDI.active = false; MIDI.held.clear(); MIDI.sustained.clear(); }
   function onMidi(e) {
     const [st, d1, d2] = e.data; const type = st & 0xf0;
-    if (type === 0x90 && d2 > 0) { MIDI.held.set(d1, d2); MIDI.sustained.add(d1); evalMidi(true); }
+    if (type === 0x90 && d2 > 0) { MIDI.held.set(d1, d2); MIDI.sustained.add(d1); evalMidi(true, d1); }
     else if (type === 0x80 || (type === 0x90 && d2 === 0)) { MIDI.held.delete(d1); if (!MIDI.pedal) MIDI.sustained.delete(d1); evalMidi(false); }
     else if (type === 0xb0 && d1 === 64) { const down = d2 >= 64; if (MIDI.pedal && !down) { MIDI.sustained = new Set(MIDI.held.keys()); } MIDI.pedal = down; evalMidi(false); }
   }
-  function evalMidi(onset) {
+  // A take is read as harmony plus melody: a cluster of two or more notes struck together (within 60 ms) is a chord
+  // event; a single note struck while a chord is still held is a melody note and is kept with that chord. A chord
+  // changes only when the struck cluster, or the whole held set, spells a different chord.
+  MIDI.lastOnsetAt = 0; MIDI.cluster = [];
+  function evalMidi(onset, note) {
+    const now = performance.now();
+    if (onset) { if (now - MIDI.lastOnsetAt > 60) MIDI.cluster = []; MIDI.cluster.push(note); MIDI.lastOnsetAt = now; }
     clearTimeout(MIDI.timer);
     MIDI.timer = setTimeout(() => {
-      const notes = [...(MIDI.pedal ? MIDI.sustained : MIDI.held.keys())];
-      if (notes.length >= 2) {
-        const id = T.identify(notes);
-        if (id) {
-          const label = `${id.root}:${id.q}:${id.bass ?? ''}`;
-          const now = performance.now();
-          if (!MIDI.current || MIDI.current.label !== label) {
-            // commit the previous chord if it lived long enough
-            if (MIDI.current && now - MIDI.currentSince > 250 && MIDI.onChord) MIDI.onChord(MIDI.current.chord, now - MIDI.currentSince);
-            MIDI.current = { label, chord: Object.assign({}, id, { notes: notes.slice().sort((a, b) => a - b) }) }; MIDI.currentSince = now;
-          }
-          MIDI.onLive && MIDI.onLive(MIDI.current.chord, notes);
+      const held = [...(MIDI.pedal ? MIDI.sustained : MIDI.held.keys())].sort((a, b) => a - b);
+      const t = performance.now();
+      if (onset) {
+        const struck = MIDI.cluster.slice().sort((a, b) => a - b);
+        const cur = MIDI.current;
+        if (struck.length === 1 && cur && held.length >= 3) {
+          const n = struck[0];
+          const core = cur.chord.notes;
+          const isMelody = n > core[core.length - 1] - 3 || !T.chordPcs(cur.chord).includes(mod(n, 12));
+          // a single note on top while the chord still sounds: melody, unless the held set now spells a new chord with it as bass
+          const id = T.identify(held);
+          if (isMelody && id && id.root === cur.chord.root && id.q === cur.chord.q) { cur.chord.melody = (cur.chord.melody || []).concat([{ note: n, at: t - MIDI.currentSince }]); MIDI.onLive && MIDI.onLive(cur.chord, held); return; }
+          if (isMelody && n > core[core.length - 1]) { cur.chord.melody = (cur.chord.melody || []).concat([{ note: n, at: t - MIDI.currentSince }]); MIDI.onLive && MIDI.onLive(cur.chord, held); return; }
         }
-      } else if (notes.length === 0 && MIDI.current) {
-        const now = performance.now();
-        if (now - MIDI.currentSince > 250 && MIDI.onChord) MIDI.onChord(MIDI.current.chord, now - MIDI.currentSince);
+        const notes = held.length >= 2 ? held : struck;
+        if (notes.length >= 2) {
+          const id = T.identify(notes, { rootless: notes.length >= 4 });
+          if (id) {
+            const label = `${id.root}:${id.q}:${id.bass ?? ''}`;
+            if (!cur || cur.label !== label) {
+              if (cur && t - MIDI.currentSince > 200 && MIDI.onChord) MIDI.onChord(cur.chord, t - MIDI.currentSince);
+              MIDI.current = { label, chord: Object.assign({}, id, { notes: notes.slice(), melody: [] }) }; MIDI.currentSince = t;
+            }
+            MIDI.onLive && MIDI.onLive(MIDI.current.chord, held);
+          }
+        }
+      } else if (held.length === 0 && MIDI.current) {
+        if (t - MIDI.currentSince > 200 && MIDI.onChord) MIDI.onChord(MIDI.current.chord, t - MIDI.currentSince);
         MIDI.current = null; MIDI.onLive && MIDI.onLive(null, []);
       }
-    }, onset ? 70 : 40);
+    }, onset ? 65 : 120);
   }
 
   // ---------- Microphone: chroma template matching ----------

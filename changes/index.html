@@ -97,6 +97,7 @@ h3{margin:0;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:v
 .chip.sm{font-size:15px;min-height:36px;padding:5px 9px 7px;border-radius:10px}
 .chip.sm::after{left:8px;right:8px;bottom:3px;height:2px}
 .chip.lg{font-size:28px;min-height:60px;padding:12px 16px 14px;border-radius:16px}
+.chip .mel{position:absolute;top:3px;right:6px;font-size:10px;opacity:.75;font-family:var(--body)}
 .chip.ghost{border-style:dashed;color:var(--muted);font-family:var(--body);font-weight:500;font-size:14px}
 .chip.ghost::after{display:none}
 .chips{display:flex;gap:8px;flex-wrap:wrap;align-items:center;min-width:0}
@@ -313,7 +314,7 @@ kbd{font-family:var(--mono);background:var(--panel2);border:1px solid var(--line
       <div class="panel tight lens">
         <div class="row between">
           <h3>Lens</h3>
-          <div class="row"><button class="small" id="shadowBtn" title="Negative harmony: the whole progression in a mirror">Shadow</button><button class="small" id="dareBtn" title="One notch deeper than the dial">Dare me</button></div>
+          <div class="row"><button class="small on" id="melodyBtn" hidden title="Keep the melody you played: options must hold those notes">♪ Melody</button><button class="small" id="shadowBtn" title="Negative harmony: the whole progression in a mirror">Shadow</button><button class="small" id="dareBtn" title="One notch deeper than the dial">Dare me</button></div>
         </div>
         <div class="seg" id="styleSeg" role="tablist" aria-label="Style"></div>
         <div class="row between">
@@ -2054,14 +2055,23 @@ const Reharm = (() => {
     const inSig = sig(prog);
     const seen = new Set();
     all = all.filter(o => { const k = sig(o.prog); if (k === inSig || seen.has(k)) return false; seen.add(k); return true; });
-    // readings and scores
+    // readings and scores; a melody the writer played over a chord must still fit the chord that replaces it
+    const fitsMelody = (c) => {
+      if (!c.melody || !c.melody.length) return true;
+      const pcs = T.chordPcs(c); const k = cat(c);
+      const ok = k === 'min' ? [2, 5, 9] : k === 'maj' ? [2, 6, 9] : k === 'dom' ? [1, 2, 3, 6, 8, 9] : k === 'sus' ? [2, 9] : [2];
+      return c.melody.every(n => pcs.includes(mod(n, 12)) || ok.includes(mod(n - c.root, 12)));
+    };
     all.forEach(o => {
       o.mood = M.progressionMood(o.prog, key, style);
       o.roman = o.prog.map(c => c.roman || T.romanNumeral(c, key));
+      o.clashes = o.prog.filter(c => c.changed && !fitsMelody(c)).map(c => sym(c, key));
       let score = o.weight * (1 + 0.35 * (o.depth / depth)); // deeper (within the ask) ranks a little higher
       if (opts.mood) score += 1.6 * M.moodMatch(o.mood.focus || o.mood, opts.mood);
+      if (o.clashes.length) score -= 2.5 * o.clashes.length;
       o.score = score;
     });
+    if (opts.melodyLock) all = all.filter(o => !o.clashes.length);
     all.sort((a, b) => b.score - a.score);
     // diversity: at most two per family
     const count = {}; const picked = [];
@@ -2516,6 +2526,13 @@ const Audio = (() => {
   }
 
   // ---------- Piano ----------
+  const VOICES = new Set(); // every sounding voice: {g: gain, srcs: [nodes], end}
+  function track(g, srcs, end) { const v = { g, srcs, end }; VOICES.add(v); const ms = Math.max(0, (end - ctx.currentTime) * 1000) + 100; setTimeout(() => VOICES.delete(v), ms); return v; }
+  function killVoices() {
+    if (!ctx) return; const now = ctx.currentTime;
+    for (const v of VOICES) { try { v.g.gain.cancelScheduledValues(now); v.g.gain.setValueAtTime(v.g.gain.value, now); v.g.gain.linearRampToValueAtTime(0.0001, now + 0.06); v.srcs.forEach(src => { try { src.stop(now + 0.08); } catch (e) {} }); } catch (e) {} }
+    VOICES.clear();
+  }
   const PIANO = { meta: null, base: null, embedded: null, cache: new Map(), notes: [], ready: false, failed: false, source: 'none' };
   async function pianoInit(opts = {}) {
     PIANO.base = opts.base || null; PIANO.embedded = opts.embedded || null;
@@ -2556,7 +2573,7 @@ const Audio = (() => {
       src.playbackRate.value = Math.pow(2, (midi - sm) / 12 + ((PIANO.meta[sm] && PIANO.meta[sm].tune) || 0) / 1200);
       const g = ctx.createGain(); const peak = PIANO.source === 'hosted' ? 0.9 : 0.35 + 0.6 * vel;
       g.gain.setValueAtTime(peak, t0); g.gain.setValueAtTime(peak, t0 + dur); g.gain.exponentialRampToValueAtTime(0.001, t0 + dur + 0.45);
-      src.connect(g).connect(master); src.start(Math.max(t0, ctx.currentTime)); src.stop(t0 + dur + 0.5);
+      src.connect(g).connect(master); src.start(Math.max(t0, ctx.currentTime)); src.stop(t0 + dur + 0.5); track(g, [src], t0 + dur + 0.5);
     }).catch(() => synthTone(midi, dur, t0, vel));
   }
   // Electric piano: two-operator FM (a tine over a warm fundamental), a quick hammer click, a slow tremolo.
@@ -2583,7 +2600,7 @@ const Audio = (() => {
     lfo.connect(lg).connect(trem.gain);
     car.connect(amp); g2.connect(amp); tine.connect(tg).connect(amp); bell.connect(bg).connect(amp);
     amp.connect(lp).connect(trem).connect(out).connect(master); out.gain.value = 1;
-    [car, car2, mod, tine, bell, lfo].forEach(o => { o.start(t0); o.stop(t0 + dur + 0.45); });
+    [car, car2, mod, tine, bell, lfo].forEach(o => { o.start(t0); o.stop(t0 + dur + 0.45); }); track(out, [car, car2, mod, tine, bell, lfo], t0 + dur + 0.45);
   }
   function synthTone(midi, dur, t0, vel = 0.6) {
     const f = 440 * Math.pow(2, (midi - 69) / 12);
@@ -2592,7 +2609,7 @@ const Audio = (() => {
     const g2 = ctx.createGain(); g2.gain.value = 0.2; o2.connect(g2).connect(lp); o1.connect(lp); lp.connect(g).connect(master);
     const a = 0.12 + 0.2 * vel;
     g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(a, t0 + 0.012); g.gain.exponentialRampToValueAtTime(a * 0.4, t0 + Math.max(0.3, dur * 0.7)); g.gain.exponentialRampToValueAtTime(0.001, t0 + dur + 0.3);
-    o1.start(t0); o2.start(t0); o1.stop(t0 + dur + 0.35); o2.stop(t0 + dur + 0.35);
+    o1.start(t0); o2.start(t0); o1.stop(t0 + dur + 0.35); o2.stop(t0 + dur + 0.35); track(g, [o1, o2], t0 + dur + 0.35);
   }
   // Play a voicing (array of MIDI notes) with a gentle roll
   function playNotes(notes, dur = 1.6, when, vel = 0.62, roll = 0.012) {
@@ -2639,8 +2656,7 @@ const Audio = (() => {
     const was = PLAYER.playing;
     if (PLAYER.timer) { clearInterval(PLAYER.timer); clearTimeout(PLAYER.timer); PLAYER.timer = null; }
     PLAYER.token++; PLAYER.playing = false;
-    // soften anything already ringing by dipping the master briefly (only when something was actually playing)
-    if (was && !silent && master && ctx) { const g = master.gain; const now = ctx.currentTime; g.cancelScheduledValues(now); g.setValueAtTime(g.value, now); g.linearRampToValueAtTime(0.0001, now + 0.12); g.setValueAtTime(0.9, now + 0.2); }
+    if (!silent) killVoices(); // everything ringing or scheduled is silenced now, not at the end of the bar
   }
 
   // ---------- MIDI ----------
@@ -2662,32 +2678,50 @@ const Audio = (() => {
   function midiStop() { if (MIDI.access) MIDI.inputs.forEach(i => i.onmidimessage = null); MIDI.active = false; MIDI.held.clear(); MIDI.sustained.clear(); }
   function onMidi(e) {
     const [st, d1, d2] = e.data; const type = st & 0xf0;
-    if (type === 0x90 && d2 > 0) { MIDI.held.set(d1, d2); MIDI.sustained.add(d1); evalMidi(true); }
+    if (type === 0x90 && d2 > 0) { MIDI.held.set(d1, d2); MIDI.sustained.add(d1); evalMidi(true, d1); }
     else if (type === 0x80 || (type === 0x90 && d2 === 0)) { MIDI.held.delete(d1); if (!MIDI.pedal) MIDI.sustained.delete(d1); evalMidi(false); }
     else if (type === 0xb0 && d1 === 64) { const down = d2 >= 64; if (MIDI.pedal && !down) { MIDI.sustained = new Set(MIDI.held.keys()); } MIDI.pedal = down; evalMidi(false); }
   }
-  function evalMidi(onset) {
+  // A take is read as harmony plus melody: a cluster of two or more notes struck together (within 60 ms) is a chord
+  // event; a single note struck while a chord is still held is a melody note and is kept with that chord. A chord
+  // changes only when the struck cluster, or the whole held set, spells a different chord.
+  MIDI.lastOnsetAt = 0; MIDI.cluster = [];
+  function evalMidi(onset, note) {
+    const now = performance.now();
+    if (onset) { if (now - MIDI.lastOnsetAt > 60) MIDI.cluster = []; MIDI.cluster.push(note); MIDI.lastOnsetAt = now; }
     clearTimeout(MIDI.timer);
     MIDI.timer = setTimeout(() => {
-      const notes = [...(MIDI.pedal ? MIDI.sustained : MIDI.held.keys())];
-      if (notes.length >= 2) {
-        const id = T.identify(notes);
-        if (id) {
-          const label = `${id.root}:${id.q}:${id.bass ?? ''}`;
-          const now = performance.now();
-          if (!MIDI.current || MIDI.current.label !== label) {
-            // commit the previous chord if it lived long enough
-            if (MIDI.current && now - MIDI.currentSince > 250 && MIDI.onChord) MIDI.onChord(MIDI.current.chord, now - MIDI.currentSince);
-            MIDI.current = { label, chord: Object.assign({}, id, { notes: notes.slice().sort((a, b) => a - b) }) }; MIDI.currentSince = now;
-          }
-          MIDI.onLive && MIDI.onLive(MIDI.current.chord, notes);
+      const held = [...(MIDI.pedal ? MIDI.sustained : MIDI.held.keys())].sort((a, b) => a - b);
+      const t = performance.now();
+      if (onset) {
+        const struck = MIDI.cluster.slice().sort((a, b) => a - b);
+        const cur = MIDI.current;
+        if (struck.length === 1 && cur && held.length >= 3) {
+          const n = struck[0];
+          const core = cur.chord.notes;
+          const isMelody = n > core[core.length - 1] - 3 || !T.chordPcs(cur.chord).includes(mod(n, 12));
+          // a single note on top while the chord still sounds: melody, unless the held set now spells a new chord with it as bass
+          const id = T.identify(held);
+          if (isMelody && id && id.root === cur.chord.root && id.q === cur.chord.q) { cur.chord.melody = (cur.chord.melody || []).concat([{ note: n, at: t - MIDI.currentSince }]); MIDI.onLive && MIDI.onLive(cur.chord, held); return; }
+          if (isMelody && n > core[core.length - 1]) { cur.chord.melody = (cur.chord.melody || []).concat([{ note: n, at: t - MIDI.currentSince }]); MIDI.onLive && MIDI.onLive(cur.chord, held); return; }
         }
-      } else if (notes.length === 0 && MIDI.current) {
-        const now = performance.now();
-        if (now - MIDI.currentSince > 250 && MIDI.onChord) MIDI.onChord(MIDI.current.chord, now - MIDI.currentSince);
+        const notes = held.length >= 2 ? held : struck;
+        if (notes.length >= 2) {
+          const id = T.identify(notes, { rootless: notes.length >= 4 });
+          if (id) {
+            const label = `${id.root}:${id.q}:${id.bass ?? ''}`;
+            if (!cur || cur.label !== label) {
+              if (cur && t - MIDI.currentSince > 200 && MIDI.onChord) MIDI.onChord(cur.chord, t - MIDI.currentSince);
+              MIDI.current = { label, chord: Object.assign({}, id, { notes: notes.slice(), melody: [] }) }; MIDI.currentSince = t;
+            }
+            MIDI.onLive && MIDI.onLive(MIDI.current.chord, held);
+          }
+        }
+      } else if (held.length === 0 && MIDI.current) {
+        if (t - MIDI.currentSince > 200 && MIDI.onChord) MIDI.onChord(MIDI.current.chord, t - MIDI.currentSince);
         MIDI.current = null; MIDI.onLive && MIDI.onLive(null, []);
       }
-    }, onset ? 70 : 40);
+    }, onset ? 65 : 120);
   }
 
   // ---------- Microphone: chroma template matching ----------
@@ -2797,7 +2831,7 @@ if (typeof module !== 'undefined') module.exports = Audio;
   const T = Theory, M = Mood, R = Reharm, V = Voicing, A = Audio;
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  const BUILD = '2610191556';
+  const BUILD = '2610191606';
 
   // ---------- state ----------
   const DEFAULTS = { symbols: 'plain', twoHands: false, span: 'default', sound: true, tone: 'grand', feel: 'hold', bpm: 76, look: 'night', fingers: false, instrument: 'piano', styles: ['neosoul', 'gospel'] };
@@ -2844,7 +2878,8 @@ if (typeof module !== 'undefined') module.exports = Audio;
     const m = opts.mood || moodOf(c, key, opts.i, opts.prog);
     const beats = c.beats || 4; const dur = Math.min(1, beats / 4);
     const cls = ['chip', opts.cls || '', c.changed ? 'changed' : ''].join(' ').trim();
-    return `<button class="${cls}" style="${M.vars(m)};--dur:calc((100% - 20px) * ${dur.toFixed(2)})" data-i="${opts.i ?? ''}" aria-label="${esc(speak(c, key))}${beats !== 4 ? ', ' + beats + ' beats' : ''}" title="${esc(speak(c, key))}">${chordInner(c, key)}</button>`;
+    const mel = c.melody && c.melody.length ? ` · melody ${c.melody.map(n => T.pcName(n % 12, key || S.key)).join(' ')}` : '';
+    return `<button class="${cls}" style="${M.vars(m)};--dur:calc((100% - 20px) * ${dur.toFixed(2)})" data-i="${opts.i ?? ''}" aria-label="${esc(speak(c, key))}${beats !== 4 ? ', ' + beats + ' beats' : ''}${esc(mel)}" title="${esc(speak(c, key) + mel)}">${chordInner(c, key)}${mel ? '<span class="mel" aria-hidden="true">♪</span>' : ''}</button>`;
   }
   function gradientOf(prog, key) {
     const total = prog.reduce((a, c) => a + (c.beats || 4), 0); let acc = 0; const stops = [];
@@ -2972,7 +3007,7 @@ if (typeof module !== 'undefined') module.exports = Audio;
         $('midiSub').textContent = st.inputs.length ? st.inputs.join(', ') : 'no keyboard found — plug one in';
         $('midiHint').textContent = st.inputs.length ? 'Hold a chord; lift and play the next. Pedal down keeps the chord.' : 'Connect a USB or Bluetooth keyboard. It appears here automatically.';
       },
-      onLive: (c, notes) => { const el = $('midiLive'); if (!c) { el.textContent = '—'; return; } el.innerHTML = chordInner(c); el.style.color = M.css(moodOf(c, S.key), 8); },
+      onLive: (c, notes) => { const el = $('midiLive'); if (!c) { el.textContent = '—'; $('midiSub').textContent = 'listening'; return; } el.innerHTML = chordInner(c); el.style.color = M.css(moodOf(c, S.key), 8); $('midiSub').textContent = c.melody && c.melody.length ? 'melody: ' + c.melody.map(m => T.pcName(m.note % 12, S.key)).join(' ') : notes.map(n => T.pcName(n % 12, S.key)).join(' '); },
       onChord: (c, ms) => { addChord(Object.assign({}, c, { beats: 4, ms, src: 'midi' })); },
     });
     if (ok) $('midiLbl').textContent = 'Reading';
@@ -3011,7 +3046,8 @@ if (typeof module !== 'undefined') module.exports = Audio;
     // merge an immediate repeat of the same chord into a longer one (the mic often re-hears a held chord)
     const L = S.prog[S.prog.length - 1];
     if (L && c.src !== 'tap' && c.src !== 'type' && T.sameChord(L, c) && L.src === c.src) { L.ms = (L.ms || 0) + (c.ms || 0); if (!quiet) renderHeard(); return; }
-    S.prog.push({ root: c.root, q: c.q, bass: c.bass ?? null, beats: c.beats || 4, ms: c.ms, conf: c.conf, src: c.src });
+    const melody = c.melody && c.melody.length ? c.melody.map(m => typeof m === 'number' ? m : m.note) : undefined;
+    S.prog.push({ root: c.root, q: c.q, bass: c.bass ?? null, beats: c.beats || 4, ms: c.ms, conf: c.conf, src: c.src, melody, notes: c.notes });
     if (!S.keyLocked) detectKey();
     if (!quiet) renderHeard();
     save();
@@ -3083,6 +3119,7 @@ if (typeof module !== 'undefined') module.exports = Audio;
   $('depthDown').addEventListener('click', () => { S.depth = Math.max(1, S.depth - 1); S.openCard = -1; recompute(); save(); });
   $('depthUp').addEventListener('click', () => { S.depth = Math.min(R.STYLES[S.style].ceiling, S.depth + 1); S.openCard = -1; recompute(); save(); });
   $('dareBtn').addEventListener('click', () => { S.dare = !S.dare; S.openCard = -1; recompute(); if (S.dare) toast('One notch deeper than the dial'); });
+  $('melodyBtn').addEventListener('click', () => { S.melodyLock = S.melodyLock === false ? true : false; recompute(); toast(S.melodyLock === false ? 'Options may move your melody notes' : 'Only options that keep your melody notes'); });
   $('shadowBtn').addEventListener('click', () => { if (!S.prog.length) return; S.shadow = S.shadow ? null : R.shadow(S.prog, S.key); S.openCard = -1; recompute(); if (S.shadow) toast('The same song in a mirror'); });
   $('ideasHear').dataset.play = '▶ Hear'; $('ideasHear').addEventListener('click', () => playProg(S.prog, S.key, S.style, $('ideasProg')));
   $('ideasEdit').addEventListener('click', () => showTab('listen'));
@@ -3097,7 +3134,9 @@ if (typeof module !== 'undefined') module.exports = Audio;
     $('ideasRoman').textContent = R.describe(S.prog, S.key);
     $('ideasMood').innerHTML = `<b>${esc(pm.words.slice(0, 2).join(', '))}</b> — ${esc(pm.sentence)}`;
     const depth = Math.min(R.STYLES[S.style].ceiling, S.depth + (S.dare ? 1 : 0));
-    S.options = R.ideas(S.prog, S.key, { style: S.style, depth, mood: S.mood, limit: 7 });
+    const hasMelody = S.prog.some(c => c.melody && c.melody.length);
+    $('melodyBtn').hidden = !hasMelody; $('melodyBtn').classList.toggle('on', S.melodyLock !== false);
+    S.options = R.ideas(S.prog, S.key, { style: S.style, depth, mood: S.mood, limit: 7, melodyLock: hasMelody && S.melodyLock !== false });
     if (S.shadow) S.options.unshift(Object.assign({ depth: 5, mood: M.progressionMood(S.shadow.prog, S.key, S.style), roman: S.shadow.prog.map(c => T.romanNumeral(c, S.key)) }, S.shadow));
     if (!S.options.length) { host.innerHTML = `<div class="hint">Nothing to add at this depth in ${esc(R.STYLES[S.style].name)} — turn the depth up, try Dare me, or another lens.</div>`; return; }
     host.innerHTML = S.options.map((o, idx) => cardHTML(o, idx)).join('');
@@ -3118,7 +3157,7 @@ if (typeof module !== 'undefined') module.exports = Audio;
       <div class="moodbar" style="--g:${gradientOf(o.prog, S.key)}"></div>
       <div class="chips scroll">${o.prog.map((c, i) => chipHTML(c, S.key, { i, prog: o.prog })).join('')}</div>
       <div class="rn">${esc(o.roman.join(' – '))}</div>
-      <div class="reason">${esc(o.reason)}</div>
+      <div class="reason">${esc(o.reason)}${o.clashes && o.clashes.length ? ` <span class="q">Clashes with the melody on ${esc(o.clashes.join(', '))}.</span>` : ''}</div>
       <div class="actions"><button data-act="hear" data-play="▶ Hear">▶ Hear</button><button data-act="chart">${S.openCard === idx ? 'Hide chart' : 'Chart'}</button><button data-act="keep" class="primary">Keep</button></div>
       <div class="chartwrap" data-chart="${idx}" ${S.openCard === idx ? '' : 'hidden'}></div></div>`;
   }

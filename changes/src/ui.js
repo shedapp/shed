@@ -50,7 +50,8 @@
     const m = opts.mood || moodOf(c, key, opts.i, opts.prog);
     const beats = c.beats || 4; const dur = Math.min(1, beats / 4);
     const cls = ['chip', opts.cls || '', c.changed ? 'changed' : ''].join(' ').trim();
-    return `<button class="${cls}" style="${M.vars(m)};--dur:calc((100% - 20px) * ${dur.toFixed(2)})" data-i="${opts.i ?? ''}" aria-label="${esc(speak(c, key))}${beats !== 4 ? ', ' + beats + ' beats' : ''}" title="${esc(speak(c, key))}">${chordInner(c, key)}</button>`;
+    const mel = c.melody && c.melody.length ? ` · melody ${c.melody.map(n => T.pcName(n % 12, key || S.key)).join(' ')}` : '';
+    return `<button class="${cls}" style="${M.vars(m)};--dur:calc((100% - 20px) * ${dur.toFixed(2)})" data-i="${opts.i ?? ''}" aria-label="${esc(speak(c, key))}${beats !== 4 ? ', ' + beats + ' beats' : ''}${esc(mel)}" title="${esc(speak(c, key) + mel)}">${chordInner(c, key)}${mel ? '<span class="mel" aria-hidden="true">♪</span>' : ''}</button>`;
   }
   function gradientOf(prog, key) {
     const total = prog.reduce((a, c) => a + (c.beats || 4), 0); let acc = 0; const stops = [];
@@ -178,7 +179,7 @@
         $('midiSub').textContent = st.inputs.length ? st.inputs.join(', ') : 'no keyboard found — plug one in';
         $('midiHint').textContent = st.inputs.length ? 'Hold a chord; lift and play the next. Pedal down keeps the chord.' : 'Connect a USB or Bluetooth keyboard. It appears here automatically.';
       },
-      onLive: (c, notes) => { const el = $('midiLive'); if (!c) { el.textContent = '—'; return; } el.innerHTML = chordInner(c); el.style.color = M.css(moodOf(c, S.key), 8); },
+      onLive: (c, notes) => { const el = $('midiLive'); if (!c) { el.textContent = '—'; $('midiSub').textContent = 'listening'; return; } el.innerHTML = chordInner(c); el.style.color = M.css(moodOf(c, S.key), 8); $('midiSub').textContent = c.melody && c.melody.length ? 'melody: ' + c.melody.map(m => T.pcName(m.note % 12, S.key)).join(' ') : notes.map(n => T.pcName(n % 12, S.key)).join(' '); },
       onChord: (c, ms) => { addChord(Object.assign({}, c, { beats: 4, ms, src: 'midi' })); },
     });
     if (ok) $('midiLbl').textContent = 'Reading';
@@ -217,7 +218,8 @@
     // merge an immediate repeat of the same chord into a longer one (the mic often re-hears a held chord)
     const L = S.prog[S.prog.length - 1];
     if (L && c.src !== 'tap' && c.src !== 'type' && T.sameChord(L, c) && L.src === c.src) { L.ms = (L.ms || 0) + (c.ms || 0); if (!quiet) renderHeard(); return; }
-    S.prog.push({ root: c.root, q: c.q, bass: c.bass ?? null, beats: c.beats || 4, ms: c.ms, conf: c.conf, src: c.src });
+    const melody = c.melody && c.melody.length ? c.melody.map(m => typeof m === 'number' ? m : m.note) : undefined;
+    S.prog.push({ root: c.root, q: c.q, bass: c.bass ?? null, beats: c.beats || 4, ms: c.ms, conf: c.conf, src: c.src, melody, notes: c.notes });
     if (!S.keyLocked) detectKey();
     if (!quiet) renderHeard();
     save();
@@ -289,6 +291,7 @@
   $('depthDown').addEventListener('click', () => { S.depth = Math.max(1, S.depth - 1); S.openCard = -1; recompute(); save(); });
   $('depthUp').addEventListener('click', () => { S.depth = Math.min(R.STYLES[S.style].ceiling, S.depth + 1); S.openCard = -1; recompute(); save(); });
   $('dareBtn').addEventListener('click', () => { S.dare = !S.dare; S.openCard = -1; recompute(); if (S.dare) toast('One notch deeper than the dial'); });
+  $('melodyBtn').addEventListener('click', () => { S.melodyLock = S.melodyLock === false ? true : false; recompute(); toast(S.melodyLock === false ? 'Options may move your melody notes' : 'Only options that keep your melody notes'); });
   $('shadowBtn').addEventListener('click', () => { if (!S.prog.length) return; S.shadow = S.shadow ? null : R.shadow(S.prog, S.key); S.openCard = -1; recompute(); if (S.shadow) toast('The same song in a mirror'); });
   $('ideasHear').dataset.play = '▶ Hear'; $('ideasHear').addEventListener('click', () => playProg(S.prog, S.key, S.style, $('ideasProg')));
   $('ideasEdit').addEventListener('click', () => showTab('listen'));
@@ -303,7 +306,9 @@
     $('ideasRoman').textContent = R.describe(S.prog, S.key);
     $('ideasMood').innerHTML = `<b>${esc(pm.words.slice(0, 2).join(', '))}</b> — ${esc(pm.sentence)}`;
     const depth = Math.min(R.STYLES[S.style].ceiling, S.depth + (S.dare ? 1 : 0));
-    S.options = R.ideas(S.prog, S.key, { style: S.style, depth, mood: S.mood, limit: 7 });
+    const hasMelody = S.prog.some(c => c.melody && c.melody.length);
+    $('melodyBtn').hidden = !hasMelody; $('melodyBtn').classList.toggle('on', S.melodyLock !== false);
+    S.options = R.ideas(S.prog, S.key, { style: S.style, depth, mood: S.mood, limit: 7, melodyLock: hasMelody && S.melodyLock !== false });
     if (S.shadow) S.options.unshift(Object.assign({ depth: 5, mood: M.progressionMood(S.shadow.prog, S.key, S.style), roman: S.shadow.prog.map(c => T.romanNumeral(c, S.key)) }, S.shadow));
     if (!S.options.length) { host.innerHTML = `<div class="hint">Nothing to add at this depth in ${esc(R.STYLES[S.style].name)} — turn the depth up, try Dare me, or another lens.</div>`; return; }
     host.innerHTML = S.options.map((o, idx) => cardHTML(o, idx)).join('');
@@ -324,7 +329,7 @@
       <div class="moodbar" style="--g:${gradientOf(o.prog, S.key)}"></div>
       <div class="chips scroll">${o.prog.map((c, i) => chipHTML(c, S.key, { i, prog: o.prog })).join('')}</div>
       <div class="rn">${esc(o.roman.join(' – '))}</div>
-      <div class="reason">${esc(o.reason)}</div>
+      <div class="reason">${esc(o.reason)}${o.clashes && o.clashes.length ? ` <span class="q">Clashes with the melody on ${esc(o.clashes.join(', '))}.</span>` : ''}</div>
       <div class="actions"><button data-act="hear" data-play="▶ Hear">▶ Hear</button><button data-act="chart">${S.openCard === idx ? 'Hide chart' : 'Chart'}</button><button data-act="keep" class="primary">Keep</button></div>
       <div class="chartwrap" data-chart="${idx}" ${S.openCard === idx ? '' : 'hidden'}></div></div>`;
   }

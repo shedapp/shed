@@ -97,6 +97,7 @@ h3{margin:0;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:v
 .chip.sm{font-size:15px;min-height:36px;padding:5px 9px 7px;border-radius:10px}
 .chip.sm::after{left:8px;right:8px;bottom:3px;height:2px}
 .chip.lg{font-size:28px;min-height:60px;padding:12px 16px 14px;border-radius:16px}
+.chip .mel{position:absolute;top:3px;right:6px;font-size:10px;opacity:.75;font-family:var(--body)}
 .chip.ghost{border-style:dashed;color:var(--muted);font-family:var(--body);font-weight:500;font-size:14px}
 .chip.ghost::after{display:none}
 .chips{display:flex;gap:8px;flex-wrap:wrap;align-items:center;min-width:0}
@@ -313,7 +314,7 @@ kbd{font-family:var(--mono);background:var(--panel2);border:1px solid var(--line
       <div class="panel tight lens">
         <div class="row between">
           <h3>Lens</h3>
-          <div class="row"><button class="small" id="shadowBtn" title="Negative harmony: the whole progression in a mirror">Shadow</button><button class="small" id="dareBtn" title="One notch deeper than the dial">Dare me</button></div>
+          <div class="row"><button class="small on" id="melodyBtn" hidden title="Keep the melody you played: options must hold those notes">♪ Melody</button><button class="small" id="shadowBtn" title="Negative harmony: the whole progression in a mirror">Shadow</button><button class="small" id="dareBtn" title="One notch deeper than the dial">Dare me</button></div>
         </div>
         <div class="seg" id="styleSeg" role="tablist" aria-label="Style"></div>
         <div class="row between">
