@@ -3,7 +3,7 @@
   const T = Theory, M = Mood, R = Reharm, V = Voicing, A = Audio;
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  const BUILD = 'v0.7.4';
+  const BUILD = 'v0.7.5';
 
   // ---------- state ----------
   const DEFAULTS = { symbols: 'plain', twoHands: false, span: 'default', sound: true, tone: 'grand', feel: 'hold', bpm: 76, look: 'night', fingers: false, instrument: 'piano', styles: ['neosoul', 'gospel'] };
@@ -99,32 +99,55 @@
     const harmNotes = notes.filter(n => !mel.has(n)).map(n => n.n).sort((a, b) => a - b);
     const center = harmNotes.length ? harmNotes[Math.floor(harmNotes.length / 2)] : null;
     const lows = harmony.filter(h => h.n >= 2).map(h => h.low).sort((a, b) => a - b); const low = lows.length ? lows[Math.floor(lows.length / 2)] : null;
-    S.take.layers = { melody, harmony, center, low, t0: notes[0].at, t1: Math.max(...notes.map(n => n.at + n.dur)) };
+    const ups = harmony.filter(h => h.n >= 2).map(h => (h.low + h.hi) / 2 + (h.hi - h.low) / 4).sort((a, b) => a - b); const upper = ups.length ? Math.round(ups[Math.floor(ups.length / 2)]) : null;
+    S.take.layers = { melody, harmony, center, low, upper, t0: notes[0].at, t1: Math.max(...notes.map(n => n.at + n.dur)) };
     return S.take.layers;
   }
   function progItems(prog, key, style) {
     const L = S.settings.feel === 'asPlayed' ? takeLayers() : null;
     const spanned = S.prog.filter(c => c.span);
-    const vs = V.voiceProgression(prog, key, style, { span: S.settings.span, center: L && L.center != null ? Math.max(58, Math.min(72, L.center + 4)) : undefined });
-    if (!L || !spanned.length) return vs.map((v, i) => ({ notes: v.all, beats: prog[i].beats || 4 }));
-    const t0 = Math.min(L.t0, ...spanned.map(c => c.span.start)), t1 = Math.max(L.t1, ...spanned.map(c => c.span.end));
-    const totalBeats = prog.reduce((a, c) => a + (c.beats || 4), 0); const mpb = (t1 - t0) / totalBeats;
+    // register: where the player's right hand actually was (upper comping notes), so voicings live there
+    const vs = V.voiceProgression(prog, key, style, { span: S.settings.span, center: L && L.upper != null ? Math.max(57, Math.min(74, L.upper)) : undefined });
+    if (!L || spanned.length !== S.prog.length || !S.prog.length) return vs.map((v, i) => ({ notes: v.all, beats: prog[i].beats || 4 }));
+    // Real time, anchored to the chords as played: original chord j owns [start_j, start_{j+1}); the option's chords are
+    // laid over the same beat positions, so a chord that splits a bar splits that bar's real time, nothing drifts.
+    const src = S.prog.map((c, j) => { const s0 = j === 0 ? Math.min(c.span.start, L.t0) : c.span.start; const e0 = j < S.prog.length - 1 ? S.prog[j + 1].span.start : Math.max(c.span.end, L.t1); return { s: s0, e: Math.max(e0, s0 + 1), beats: c.beats || 4 }; });
+    // align option chords to the chords as played: an unchanged chord anchors to its source; changed or inserted chords
+    // between two anchors inherit the real time of the source chords they replaced (or share an anchor's time when
+    // nothing was replaced), split by their beats
+    const n = S.prog.length; const anchors = []; let j = 0;
+    prog.forEach((c, i) => { if (c.changed || c.inserted) return; const jj = S.prog.findIndex((o, idx) => idx >= j && idx <= j + 2 && T.sameChord(o, c)); if (jj >= 0) { anchors.push({ i, j: jj }); j = jj + 1; } });
+    const groups = []; // {chords:[i..], srcs:[j..]}
+    const add = (is, js) => { if (is.length) groups.push({ is, js }); };
+    let pi = -1, pj = -1;
+    anchors.forEach((a, k) => {
+      const between = []; for (let i = pi + 1; i < a.i; i++) between.push(i);
+      const skipped = []; for (let jj = pj + 1; jj < a.j; jj++) skipped.push(jj);
+      if (between.length && skipped.length) add(between, skipped);
+      else if (between.length) { const prev = groups[groups.length - 1]; const shrank = prev && prev.is.length === 1 && (prog[prev.is[0]].beats || 4) < (S.prog[prev.js[0]].beats || 4); if (shrank) prev.is.push(...between); else { add([...between, a.i], [...skipped, a.j]); pi = a.i; pj = a.j; return; } }
+      else if (skipped.length) { const prev = groups[groups.length - 1]; if (prev) prev.js.push(...skipped); else add([a.i], [...skipped, a.j]), pi = a.i, pj = a.j; if (prev) { add([a.i], [a.j]); pi = a.i; pj = a.j; } return; }
+      add([a.i], [a.j]); pi = a.i; pj = a.j;
+    });
+    { const tail = []; for (let i = pi + 1; i < prog.length; i++) tail.push(i); const rest = []; for (let jj = pj + 1; jj < n; jj++) rest.push(jj); if (tail.length) { if (rest.length) add(tail, rest); else if (groups.length) groups[groups.length - 1].is.push(...tail); else add(tail, rest.length ? rest : S.prog.map((_, jj) => jj)); } else if (rest.length && groups.length) groups[groups.length - 1].js.push(...rest); }
+    if (!groups.length) add(prog.map((_, i) => i), S.prog.map((_, jj) => jj));
+    const win = new Array(prog.length);
+    for (const g of groups) { const s0 = Math.min(...g.js.map(jj => src[jj].s)), e0 = Math.max(...g.js.map(jj => src[jj].e)); const tot = g.is.reduce((a, i) => a + (prog[i].beats || 4), 0); let acc = 0; for (const i of g.is) { const bb = prog[i].beats || 4; win[i] = [s0 + (e0 - s0) * acc / tot, s0 + (e0 - s0) * (acc + bb) / tot]; acc += bb; } }
+    const bpm = S.settings.bpm || 76; const mpb = 60000 / bpm;
     const V127 = (v) => Math.min(1, 0.2 + v / 127 * 0.8);
-    let b = 0;
     return vs.map((v, i) => {
-      const c = prog[i]; const beats = c.beats || 4; const w0 = t0 + b * mpb, w1 = t0 + (b + beats) * mpb; b += beats;
+      const c = prog[i]; const [w0, w1] = win[i] || [src[0].s, src[src.length - 1].e];
       const first = i === 0, last = i === vs.length - 1;
       const inWin = (t) => (first || t >= w0 - 20) && (last || t < w1 - 20);
       const ev = [];
-      // the player's comping rhythm with the option's voicing: full voicing for a chord strike, bass alone for a single low note
       const rh = v.rh.slice(); let lh = v.lh.slice();
       if (L.low != null && lh.length) { while (lh[0] < L.low - 6 && lh[lh.length - 1] + 12 < rh[0]) lh = lh.map(n => n + 12); while (lh[0] > L.low + 6 && lh[0] - 12 >= 28) lh = lh.map(n => n - 12); }
       const all = lh.concat(rh);
-      for (const h of L.harmony) { if (!inWin(h.at)) continue; const notes = h.n >= 2 ? all : (h.low < (lh[0] || 60) + 7 ? [lh[0]] : rh); ev.push({ at: (h.at - w0) / mpb, dur: Math.max(0.08, h.dur / mpb), notes, vel: V127(h.vel) }); }
+      // the player's comping rhythm with the option's voicing: full voicing for a chord strike, bass alone for a single low note
+      for (const h of L.harmony) { if (!inWin(h.at)) continue; const notes = h.n >= 2 ? all : (h.low < (lh[0] || 60) + 7 ? [lh[0]] : rh); ev.push({ at: (h.at - w0) / mpb, dur: Math.max(0.08, Math.min(h.dur, w1 - h.at + 60) / mpb), notes, vel: V127(h.vel) }); }
       // the melody, note for note
       for (const m of L.melody) { if (!inWin(m.at)) continue; ev.push({ at: (m.at - w0) / mpb, dur: Math.max(0.05, m.dur / mpb), notes: [m.n], vel: V127(Math.min(127, m.v + 6)) }); }
-      const item = { notes: all, beats };
-      if (ev.length) item.events = ev;
+      const item = { notes: all, beats: Math.max(0.25, (w1 - w0) / mpb) };
+      if (ev.length) item.events = ev; else item.events = [{ at: 0, dur: item.beats, notes: all, vel: 0.6 }];
       return item;
     });
   }

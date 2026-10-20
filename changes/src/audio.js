@@ -151,7 +151,7 @@ const Audio = (() => {
   // Play a recorded take exactly: notes with absolute ms times and durations and velocities 0..127
   function playTake(notes, opts = {}) {
     stop(true); ensureCtx(); unmuteIOS();
-    const token = ++PLAYER.token; PLAYER.playing = true; PLAYER.lastItems = items;
+    const token = ++PLAYER.token; PLAYER.playing = true; PLAYER.lastItems = null;
     const start = ctx.currentTime + 0.1; const first = notes.length ? Math.min(...notes.map(n => n.at)) : 0; let end = start;
     for (const n of notes) { const at = start + (n.at - first) / 1000; const dur = Math.max(0.08, n.dur / 1000); playTone(n.n, dur, at, Math.min(1, 0.2 + n.v / 127 * 0.8)); end = Math.max(end, at + dur); }
     if (opts.onNote) notes.forEach(n => { const ms = Math.max(0, (start + (n.at - first) / 1000 - ctx.currentTime) * 1000); setTimeout(() => { if (PLAYER.token === token) opts.onNote(n); }, ms); });
@@ -253,12 +253,12 @@ const Audio = (() => {
   MIDI.lastOnsetAt = 0; MIDI.cluster = []; MIDI.clusterVel = {};
   function evalMidi(onset, note, vel) {
     const now = performance.now();
-    if (onset) { if (now - MIDI.lastOnsetAt > 60) { MIDI.cluster = []; MIDI.clusterVel = {}; } MIDI.cluster.push(note); MIDI.clusterVel[note] = vel || 64; MIDI.lastOnsetAt = now; }
+    if (onset) { if (now - MIDI.lastOnsetAt > 60) { MIDI.cluster = []; MIDI.clusterVel = {}; MIDI.clusterStart = now; } MIDI.cluster.push(note); MIDI.clusterVel[note] = vel || 64; MIDI.lastOnsetAt = now; }
     // onsets debounce among themselves; a release or a pedal message never cancels a pending chord reading
     if (onset) { clearTimeout(MIDI.timer); } else { clearTimeout(MIDI.offTimer); }
     const run = () => {
       const held = [...MIDI.held.keys()].sort((a, b) => a - b);
-      const t = performance.now();
+      const t = onset && MIDI.clusterStart ? MIDI.clusterStart : performance.now(); // chord boundaries sit on the strike, not on the evaluation
       const commit = (cur) => { if (t - MIDI.currentSince > 200 && MIDI.onChord) { cur.chord.span = { start: MIDI.currentSince - MIDI.take.t0, end: t - MIDI.take.t0 }; MIDI.lastCommitted = cur.chord; MIDI.lastCommittedAt = t; MIDI.onChord(cur.chord, t - MIDI.currentSince); } };
       if (onset) {
         const struck = MIDI.cluster.slice().sort((a, b) => a - b);
