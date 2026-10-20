@@ -1,0 +1,5 @@
+Third-party content in this app
+
+Exercise illustrations (img/*.webp): Everkinetic exercise database, https://github.com/everkinetic/data
+  License: Creative Commons Attribution-ShareAlike 4.0 (CC BY-SA 4.0). Adapted: recoloured to light lines on a dark background, trimmed and resized.
+three.min.js: three.js r152, MIT License, https://github.com/mrdoob/three.js
