@@ -1,0 +1,21 @@
+{
+ "name": "Olympus",
+ "short_name": "Olympus",
+ "start_url": "./index.html",
+ "scope": "./",
+ "display": "standalone",
+ "background_color": "#0B0D11",
+ "theme_color": "#0B0D11",
+ "icons": [
+  {
+   "src": "icon-180.png",
+   "sizes": "180x180",
+   "type": "image/png"
+  },
+  {
+   "src": "icon-360.png",
+   "sizes": "360x360",
+   "type": "image/png"
+  }
+ ]
+}
