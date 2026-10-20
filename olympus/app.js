@@ -454,13 +454,16 @@ function prepAnim(key){
 }
 function illusCard(exKey,opts){const il=ILLUS&&ILLUS[exKey];if(!il||!il.a||!il.b)return '';const ex=EXERCISES[exKey]||{};opts=opts||{};
   return '<div class="demo illus'+(opts.large?' large':'')+'" data-illus="'+esc(exKey)+'" role="img" aria-label="'+esc(ex.name||exKey)+', start and finish positions"><div class="frames"><img class="fa" src="'+esc(il.a)+'" alt="Start position" loading="lazy"><img class="fb" src="'+esc(il.b)+'" alt="Finish position" loading="lazy"><span class="ph pa">Position 1</span><span class="ph pb">Position 2</span></div>'+(opts.caption!==false?'<div class="demo-cap"><span class="pill bronze">'+esc(ex.tempo||'Smooth, controlled')+'</span><span class="muted small">'+(ILLUS_NOTES[exKey]?'tap to pause · see note':'tap to pause')+'</span></div>':'')+'</div>';}
+function videoCard(exKey,opts){const list=window.OLYMPUS_VIDEOS;if(!list||!list.includes(exKey))return '';const ex=EXERCISES[exKey]||{};opts=opts||{};
+  return '<div class="demo video'+(opts.large?' large':'')+'" data-video="'+esc(exKey)+'"><video src="videos/'+esc(exKey)+'.mp4" autoplay muted loop playsinline preload="metadata" aria-label="'+esc(ex.name||exKey)+' demonstration"></video>'+(opts.caption!==false?'<div class="demo-cap"><span class="pill bronze">'+esc(ex.tempo||'Smooth, controlled')+'</span><span class="muted small">full movement · tap for full screen</span></div>':'')+'</div>';}
 function demoCard(exKey,opts){
-  opts=opts||{};if(!opts.force3d){const ic=illusCard(exKey,opts);if(ic)return ic;}
+  opts=opts||{};if(!opts.force3d){const vc=videoCard(exKey,opts);if(vc)return vc;const ic=illusCard(exKey,opts);if(ic)return ic;}
   const ex=EXERCISES[exKey]||{};const key=ex.anim||exKey;const def=ANIMS[key];
   if(!def)return '';
   return '<div class="demo'+(opts.large?' large':'')+'" data-anim="'+key+'" data-ex="'+esc(exKey)+'" role="img" aria-label="Animated demonstration of '+esc(ex.name||key)+'"><svg viewBox="0 0 '+Anim.W+' '+Anim.H+'"></svg><canvas class="gl3d" width="'+(GL.W*2)+'" height="'+(GL.H*2)+'" hidden></canvas>'+(opts.caption!==false?'<div class="demo-cap"><span class="pill bronze">'+esc(ex.tempo||'Smooth, controlled')+'</span><span class="muted small">'+(opts.large?'marble athlete · working muscles in bronze · ':'')+'tap to pause</span></div>':'')+'</div>';
 }
 Anim.mount=function(){
+  $$('.demo.video').forEach(el=>{if(!el._bound){el._bound=true;const v=$('video',el);el.addEventListener('click',()=>{try{if(v.requestFullscreen)v.requestFullscreen();else if(v.webkitEnterFullscreen)v.webkitEnterFullscreen();}catch(e){}});v.addEventListener('error',()=>{el.innerHTML='<div class="empty"><b>Clip missing</b>videos/'+esc(el.dataset.video)+'.mp4 was not found.</div>';});}});
   $$('.demo.illus').forEach(el=>{if(!el._bound){el._bound=true;el.addEventListener('click',()=>el.classList.toggle('paused'));}});
   Anim.items=[];if(!GL.ready&&!GL.failed)GL.init();const els=$$('[data-anim]');for(const el of els){const def=prepAnim(el.dataset.anim);if(!def)continue;const cv=$('canvas.gl3d',el);const item={el,def,svg:$('svg',el),canvas:cv,ctx:cv?cv.getContext('2d'):null,active:activeMuscles(el.dataset.ex||el.dataset.anim),t0:performance.now()-Math.random()*800,phase:Math.random()*6,paused:false,visible:true,last:-1};Anim.items.push(item);
     if(!el._bound){el._bound=true;el.addEventListener('click',()=>{item.paused=!item.paused;item.drawnPaused=false;item.last=-1;el.classList.toggle('paused',item.paused);if(item.paused)item.pausedAt=performance.now();else item.t0+=performance.now()-item.pausedAt;});}
@@ -698,6 +701,7 @@ const Caps={sample:null,limits:null,assets:null,ready:false};
   Caps.ready=true;setSyncDot();rerender();
 })();
 window.addEventListener('online',()=>flush());
+(async function loadVideoManifest(){try{const r=await fetch('videos/manifest.json',{cache:'no-cache'});if(!r.ok)return;const m=await r.json();const keys=Array.isArray(m)?m:(m.keys||[]);if(keys.length){window.OLYMPUS_VIDEOS=keys.map(String);rerender();}}catch(e){}})();
 
 // ===================== PROGRAM ENGINE =====================
 function weekOf(iso){return Math.floor(daysBetween(S.profile.startDate,iso)/7)+1;}
