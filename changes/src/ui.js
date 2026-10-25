@@ -3,7 +3,7 @@
   const T = Theory, M = Mood, R = Reharm, V = Voicing, A = Audio;
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  const BUILD = 'v0.7.5';
+  const BUILD = 'v0.8.0';
 
   // ---------- state ----------
   const DEFAULTS = { symbols: 'plain', twoHands: false, span: 'default', sound: true, tone: 'grand', feel: 'hold', bpm: 76, look: 'night', fingers: false, instrument: 'piano', styles: ['neosoul', 'gospel'] };
@@ -65,6 +65,7 @@
   function unlockAudio() { try { A.ensureCtx(); A.unmuteIOS(); A.setTone(S.settings.tone); } catch (e) {} }
   function playChord(c, dur = 1.7) {
     if (!S.settings.sound) return; unlockAudio();
+    if (A.PLAYER.playing) stopPlayback();
     const v = V.voiceProgression([c], S.key, S.style, { span: S.settings.span })[0];
     A.playNotes(v.all, dur);
   }
@@ -145,32 +146,39 @@
       // the player's comping rhythm with the option's voicing: full voicing for a chord strike, bass alone for a single low note
       for (const h of L.harmony) { if (!inWin(h.at)) continue; const notes = h.n >= 2 ? all : (h.low < (lh[0] || 60) + 7 ? [lh[0]] : rh); ev.push({ at: (h.at - w0) / mpb, dur: Math.max(0.08, Math.min(h.dur, w1 - h.at + 60) / mpb), notes, vel: V127(h.vel) }); }
       // the melody, note for note
-      for (const m of L.melody) { if (!inWin(m.at)) continue; ev.push({ at: (m.at - w0) / mpb, dur: Math.max(0.05, m.dur / mpb), notes: [m.n], vel: V127(Math.min(127, m.v + 6)) }); }
+      for (const m of L.melody) { if (!inWin(m.at)) continue; ev.push({ at: (m.at - w0) / mpb, dur: Math.max(0.05, m.dur / mpb), notes: [m.n + (c.melodyShift || 0)], vel: V127(Math.min(127, m.v + 6)) }); }
       const item = { notes: all, beats: Math.max(0.25, (w1 - w0) / mpb) };
       if (ev.length) item.events = ev; else item.events = [{ at: 0, dur: item.beats, notes: all, vel: 0.6 }];
       return item;
     });
   }
-  let playingCleanup = null;
+  let playingCleanup = null, playingContainer = null;
+  // one thing plays at a time: starting anything stops whatever was playing, and only its own button reads Stop
+  function stopPlayback() { A.stop(); if (playingCleanup) playingCleanup(); playingContainer = null; }
   function playProg(prog, key, style, container, loop) {
     if (!S.settings.sound) { toast('Sound is off in settings'); return; }
     unlockAudio();
-    if (A.PLAYER.playing) { A.stop(); if (playingCleanup) playingCleanup(); return; }
+    if (A.PLAYER.playing) { const same = playingContainer === container; stopPlayback(); if (same) return; }
+    playingContainer = container;
     // the take itself, note for note, when nothing in the progression was changed
     if (S.settings.feel === 'asPlayed' && S.take && S.take.notes && S.take.notes.length && prog === S.prog && !prog.some(c => c.changed) && prog.some(c => c.span)) {
       const chips = container ? [...container.querySelectorAll('.chip')] : [];
       const clear = () => chips.forEach(ch => ch.classList.remove('playing'));
-      playingCleanup = () => { clear(); playingCleanup = null; updatePlayButtons(false); }; updatePlayButtons(true);
+      playingCleanup = () => { clear(); playingCleanup = null; playingContainer = null; updatePlayButtons(false, container); }; updatePlayButtons(true, container);
       A.playTake(S.take.notes, { onNote: (n) => { const i = prog.findIndex(c => c.span && n.at >= c.span.start - 30 && n.at < c.span.end); if (i >= 0 && chips[i] && !chips[i].classList.contains('playing')) { clear(); chips[i].classList.add('playing'); } }, onEnd: () => { if (playingCleanup) playingCleanup(); } });
       return;
     }
     const chips = container ? [...container.querySelectorAll('.chip')] : [];
     const clear = () => chips.forEach(ch => ch.classList.remove('playing'));
-    playingCleanup = () => { clear(); playingCleanup = null; updatePlayButtons(false); };
-    updatePlayButtons(true);
+    playingCleanup = () => { clear(); playingCleanup = null; playingContainer = null; updatePlayButtons(false, container); };
+    updatePlayButtons(true, container);
     A.play(progItems(prog, key, style), { bpm: S.settings.bpm, feel: S.settings.feel, loop, onChord: (i) => { clear(); if (chips[i]) chips[i].classList.add('playing'); if (chips[i]) setBrandHue(chips[i]); }, onEnd: () => { if (playingCleanup) playingCleanup(); } });
   }
-  function updatePlayButtons(on) { document.querySelectorAll('[data-play]').forEach(b => { b.textContent = on ? '■ Stop' : b.dataset.play; }); }
+  function playButtonFor(container) { if (!container) return null; return container.querySelector('[data-play]') || (container.id === 'heard' ? $('hearProg') : container.id === 'ideasProg' ? $('ideasHear') : null); }
+  function updatePlayButtons(on, container) {
+    document.querySelectorAll('[data-play]').forEach(b => { b.textContent = b.dataset.play; b.classList.remove('playing'); });
+    const b = on ? playButtonFor(container) : null; if (b) { b.textContent = '■ Stop'; b.classList.add('playing'); }
+  }
   function setBrandHue(el) { const dot = $('brandDot'); if (el && el.style) { const h = el.style.getPropertyValue('--h'), s = el.style.getPropertyValue('--s'), l = el.style.getPropertyValue('--l'); if (h) dot.style.background = `hsl(${h} ${s} ${l})`; } }
   function resetBrandHue() { $('brandDot').style.background = ''; }
 
@@ -249,7 +257,7 @@
       const inFrame = window.top !== window.self;
       $('micHint').innerHTML = r.reason === 'denied'
         ? 'Microphone access was refused. Allow it in the browser\'s site settings, then try again — or use <b>Tap</b> or <b>MIDI</b>.'
-        : (inFrame ? 'The microphone is not available inside this preview. Open the installed app (home screen) or the site in Safari or Chrome, or use <b>Tap</b> for now.' : 'No microphone found. Check the browser\'s permissions or use <b>Tap</b>.');
+        : (inFrame ? 'The microphone is not available inside this preview. Open the app at <a href="https://shedapp.github.io/shed/changes/" target="_blank" rel="noopener">shedapp.github.io/shed/changes</a> in Safari or Chrome (or add it to your home screen), or use <b>Tap</b> or <b>MIDI</b> here.' : 'No microphone found. Check the browser\'s permissions or use <b>Tap</b>.');
       return;
     }
     $('listenBtn').classList.add('listening'); $('listenLbl').textContent = 'Stop'; $('listenBtn').setAttribute('aria-label', 'Stop listening');
@@ -400,9 +408,10 @@
     $('styleSeg').innerHTML = R.STYLE_ORDER.map(id => `<button data-style="${id}" class="${S.style === id ? 'on' : ''}">${esc(R.STYLES[id].name)}</button>`).join('');
     $('styleSeg').querySelectorAll('button').forEach(b => b.addEventListener('click', () => { S.style = b.dataset.style; const cap = R.STYLES[S.style].ceiling; if (S.depth > cap) S.depth = cap; S.openCard = -1; recompute(); save(); b.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' }); }));
     const cap = R.STYLES[S.style].ceiling;
-    $('depthDots').innerHTML = Array.from({ length: 5 }, (_, i) => `<i class="${i < S.depth ? 'on' : ''} ${i >= cap ? 'cap' : ''}"></i>`).join('');
+    $('depthDots').innerHTML = Array.from({ length: 8 }, (_, i) => `<i class="${i < S.depth ? 'on' : ''} ${i >= cap ? 'cap' : ''}" title="${esc(R.DEPTHS[i].name)}"></i>`).join('');
     $('depthDown').disabled = S.depth <= 1; $('depthUp').disabled = S.depth >= cap;
-    $('styleBlurb').textContent = `${R.STYLES[S.style].name} goes to ${cap}`;
+    const lvl = R.DEPTHS[Math.min(8, S.depth) - 1];
+    $('styleBlurb').innerHTML = `<b>${S.depth} · ${esc(lvl.name)}</b> — ${esc(lvl.blurb)} <span class="hint">${esc(R.STYLES[S.style].name)} goes to ${cap}.</span>`;
     renderWheel();
     $('dareBtn').classList.toggle('on', S.dare);
     $('shadowBtn').classList.toggle('on', !!S.shadow);
@@ -432,6 +441,7 @@
   $('ideasMidi').addEventListener('click', () => { if (!S.prog.length) return; downloadFile('progression.mid', Export.midiFile(progItems(S.prog, S.key, S.style), S.settings.bpm, 'Changes'), 'audio/midi'); });
 
   function recompute() {
+    if (A.PLAYER.playing) stopPlayback();
     renderLens();
     const host = $('options'); $('chartHost').innerHTML = '';
     if (!S.prog.length) { $('ideasProg').innerHTML = ''; $('ideasRoman').textContent = ''; $('ideasMood').textContent = ''; host.innerHTML = '<div class="hint">Confirm a progression on Listen, then come here.</div>'; return; }
@@ -457,7 +467,7 @@
     if (S.openCard >= 0 && S.openCard < S.options.length) toggleChart(S.openCard, true); else renderSideChart();
   }
   function cardHTML(o, idx) {
-    const depthDots = Array.from({ length: 5 }, (_, i) => `<i class="${i < (o.depth || 1) ? 'on' : ''}"></i>`).join('');
+    const depthDots = Array.from({ length: 8 }, (_, i) => `<i class="${i < (o.depth || 1) ? 'on' : ''}"></i>`).join('');
     const words = (o.mood.focus && o.mood.focus.words.length ? o.mood.focus.words : o.mood.words).slice(0, 2);
     return `<div class="card ${S.openCard === idx ? 'open' : ''}" data-card="${idx}">
       <div class="head"><span class="device">${esc(o.device)}</span><span class="ddots" title="depth ${o.depth}">${depthDots}</span><span class="spacer"></span><span class="words">${o.gems ? `<span class="gem" style="--gh:${o.gems.hue}">${esc(o.gems.name.split(' ')[0])}</span> ` : ''}<b>${esc(words[0] || '')}</b>${words[1] ? ', ' + esc(words[1]) : ''}</span></div>
@@ -530,10 +540,10 @@
     bar.querySelectorAll('[data-inst] button').forEach(b => b.addEventListener('click', () => { S.settings.instrument = b.dataset.v; bar.querySelectorAll('[data-inst] button').forEach(x => x.classList.toggle('on', x === b)); render(); save(); }));
     bar.querySelector('[data-hands]').addEventListener('click', (e) => { S.settings.twoHands = !S.settings.twoHands; e.currentTarget.classList.toggle('on', S.settings.twoHands); e.currentTarget.textContent = S.settings.twoHands ? '2 hands' : 'RH'; render(); save(); });
     bar.querySelector('[data-play]').addEventListener('click', () => {
-      if (A.PLAYER.playing) { A.stop(); if (playingCleanup) playingCleanup(); return; }
+      if (A.PLAYER.playing) { const same = playingContainer === bar; stopPlayback(); if (same) return; } playingContainer = bar;
       unlockAudio(); const rows = [...body.querySelectorAll('.strow')]; const grips = [...body.querySelectorAll('.grip')];
       const clear = () => { rows.forEach(r => r.style.background = ''); grips.forEach(g => g.style.outline = ''); };
-      playingCleanup = () => { clear(); playingCleanup = null; updatePlayButtons(false); }; updatePlayButtons(true);
+      playingCleanup = () => { clear(); playingCleanup = null; playingContainer = null; updatePlayButtons(false, bar); }; updatePlayButtons(true, bar);
       A.play(progItems(prog, key, style), { bpm: S.settings.bpm, feel: S.settings.feel, onChord: (i) => { clear(); if (rows[i]) { rows[i].style.background = 'var(--panel3)'; rows[i].style.borderRadius = '8px'; } if (grips[i]) grips[i].style.outline = '2px solid var(--accent)'; }, onEnd: () => { if (playingCleanup) playingCleanup(); } });
     });
     return wrap;

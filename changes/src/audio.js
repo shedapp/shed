@@ -42,7 +42,12 @@ const Audio = (() => {
 
   // ---------- Piano ----------
   const VOICES = new Set(); // every sounding voice: {g: gain, srcs: [nodes], end}
-  function track(g, srcs, end) { const v = { g, srcs, end }; VOICES.add(v); const ms = Math.max(0, (end - ctx.currentTime) * 1000) + 100; setTimeout(() => VOICES.delete(v), ms); return v; }
+  function track(g, srcs, end, midi, start) { const v = { g, srcs, end, midi, start }; VOICES.add(v); const ms = Math.max(0, (end - ctx.currentTime) * 1000) + 100; setTimeout(() => VOICES.delete(v), ms); return v; }
+  // A re-struck string stops its own earlier vibration: when the same pitch starts again, the voice still ringing on
+  // that pitch is faded out at the new onset (scheduled, so it is exact even for notes queued ahead of time).
+  function damperSame(midi, t0) {
+    for (const v of VOICES) { if (v.midi !== midi || v.start == null || v.start >= t0 - 0.005 || v.end <= t0) continue; try { v.g.gain.cancelScheduledValues(t0); v.g.gain.setValueAtTime(v.g.gain.value || 0.0001, t0); v.g.gain.exponentialRampToValueAtTime(0.0005, t0 + 0.035); v.srcs.forEach(src => { try { src.stop(t0 + 0.05); } catch (e) {} }); v.end = t0 + 0.05; } catch (e) {} }
+  }
   function killVoices() {
     if (!ctx) return; const now = ctx.currentTime;
     for (const v of VOICES) { try { v.g.gain.cancelScheduledValues(now); v.g.gain.setValueAtTime(v.g.gain.value, now); v.g.gain.linearRampToValueAtTime(0.0001, now + 0.06); v.srcs.forEach(src => { try { src.stop(now + 0.08); } catch (e) {} }); } catch (e) {} }
@@ -100,9 +105,10 @@ const Audio = (() => {
     Promise.all(bufs).then(decoded => {
       stealIfNeeded();
       const g = ctx.createGain(); const peak = 0.55 + 0.45 * vel;
-      g.gain.setValueAtTime(peak, t0); g.gain.setValueAtTime(peak, t0 + dur); g.gain.exponentialRampToValueAtTime(0.001, t0 + dur + 0.45);
+      damperSame(midi, t0);
+      g.gain.setValueAtTime(peak, t0); g.gain.setValueAtTime(peak, t0 + dur); g.gain.exponentialRampToValueAtTime(0.001, t0 + dur + 0.3); // damper: a short, natural release
       const srcs = decoded.map((buf, i) => { const src = ctx.createBufferSource(); src.buffer = buf; src.playbackRate.value = Math.pow(2, (midi - sm) / 12 + ((PIANO.meta[sm] && PIANO.meta[sm].tune) || 0) / 1200); const lg = ctx.createGain(); lg.gain.value = mix[i][1]; src.connect(lg).connect(g); src.start(Math.max(t0, ctx.currentTime)); src.stop(t0 + dur + 0.5); return src; });
-      g.connect(master); track(g, srcs, t0 + dur + 0.5);
+      g.connect(master); track(g, srcs, t0 + dur + 0.35, midi, t0);
     }).catch(() => synthTone(midi, dur, t0, vel));
   }
   // Electric piano: two-operator FM (a tine over a warm fundamental), a quick hammer click, a slow tremolo.
@@ -156,6 +162,21 @@ const Audio = (() => {
     for (const n of notes) { const at = start + (n.at - first) / 1000; const dur = Math.max(0.08, n.dur / 1000); playTone(n.n, dur, at, Math.min(1, 0.2 + n.v / 127 * 0.8)); end = Math.max(end, at + dur); }
     if (opts.onNote) notes.forEach(n => { const ms = Math.max(0, (start + (n.at - first) / 1000 - ctx.currentTime) * 1000); setTimeout(() => { if (PLAYER.token === token) opts.onNote(n); }, ms); });
     PLAYER.timer = setTimeout(() => { if (PLAYER.token === token) { PLAYER.playing = false; if (opts.onEnd) opts.onEnd(); } }, (end - ctx.currentTime) * 1000 + 300);
+  }
+  // Pedal the way a pianist does: a tail that only the pedal was holding is cut at the next chord strike (plus a
+  // short legato overlap); a note the hand kept down keeps its length. Without this, a pedal held through the changes
+  // smears every chord into the next on playback.
+  function cleanPedal(notes) {
+    const sorted = notes.slice().sort((a, b) => a.at - b.at);
+    const strikes = []; for (const n of sorted) { const st = strikes[strikes.length - 1]; if (st && n.at - st.at < 45) st.notes.push(n); else strikes.push({ at: n.at, notes: [n] }); }
+    const chordStrikes = strikes.filter(st => st.notes.length >= 2).map(st => st.at);
+    for (const x of notes) {
+      const nextStrike = chordStrikes.find(t => t > x.at + 40);
+      if (nextStrike == null) continue;
+      const cap = nextStrike - x.at + 90;
+      if (x.dur > cap) x.dur = Math.max(x.held || 0, cap);
+    }
+    return notes;
   }
   // ---------- Progression player ----------
   // items: [{notes: [midi], beats}] ; opts: {bpm, feel: 'hold'|'groove', loop, onChord(i), onEnd()}
@@ -212,11 +233,12 @@ const Audio = (() => {
         pedal = e.on; if (!pedal) { for (const x of pedaled) { if (!open.has(x.n)) x.dur = e.t - x.at; } pedaled.length = 0; }
         continue;
       }
-      if (e.on) { if (open.has(e.n)) { const x = open.get(e.n); x.dur = e.t - x.at; } const x = { n: e.n, v: e.v, at: e.t, dur: 0 }; open.set(e.n, x); out.push(x); }
-      else { const x = open.get(e.n); if (x) { open.delete(e.n); if (pedal) { pedaled.push(x); x.dur = 0; } else x.dur = e.t - x.at; } }
+      if (e.on) { if (open.has(e.n)) { const x = open.get(e.n); x.dur = e.t - x.at; x.held = x.dur; } const x = { n: e.n, v: e.v, at: e.t, dur: 0, held: 0 }; open.set(e.n, x); out.push(x); }
+      else { const x = open.get(e.n); if (x) { open.delete(e.n); x.held = e.t - x.at; if (pedal) { pedaled.push(x); x.dur = 0; } else x.dur = e.t - x.at; } }
     }
     const end = MIDI.take.events.length ? MIDI.take.events[MIDI.take.events.length - 1].t + 400 : 0;
-    for (const x of out) if (!x.dur) x.dur = Math.max(80, end - x.at);
+    for (const x of out) { if (!x.held) x.held = Math.max(80, end - x.at); if (!x.dur) x.dur = Math.max(80, end - x.at); }
+    cleanPedal(out);
     return out;
   }
   async function midiStart(handlers = {}) {
@@ -345,17 +367,22 @@ const Audio = (() => {
     if (onset) MIDI.timer = setTimeout(run, 65); else MIDI.offTimer = setTimeout(run, 120);
   }
 
-  // ---------- Microphone: chroma template matching ----------
-  const MIC = { stream: null, analyser: null, src: null, raf: null, active: false, chroma: new Float32Array(12), bass: new Float32Array(12), ema: new Float32Array(12), emaBass: new Float32Array(12), onFrame: null, onChord: null, onLive: null, current: null, currentSince: 0, votes: {}, lastLabel: null, lastCount: 0, level: -100, silentSince: 0 };
-  const MIC_Q = ['maj', 'min', '7', 'maj7', 'm7', 'dim', 'dim7', 'm7b5', 'sus4', 'sus2', 'aug', '6', 'm6', 'add9', 'm9', 'maj9', '9', '7sus4', 'mMaj7'];
+  // ---------- Microphone: polyphonic chord recognition ----------
+  // Pipeline (the way chord-ID software does it): spectrum → spectral peaks with interpolated frequencies → a
+  // Harmonic Pitch Class Profile (each peak votes for the pitch classes it could be a harmonic of, with falling
+  // weight) → onset-aware smoothing → template match grouped by root and chord family → the simplest quality that
+  // explains the energy → a chord commits once its root and family hold for three frames.
+  const MIC = { stream: null, analyser: null, src: null, raf: null, active: false, chroma: new Float32Array(12), bass: new Float32Array(12), ema: new Float32Array(12), emaBass: new Float32Array(12), onFrame: null, onChord: null, onLive: null, current: null, currentSince: 0, lastLabel: null, lastCount: 0, silentSince: 0, level: -100, floor: -70 };
+  const MIC_Q = ['maj', 'min', '7', 'maj7', 'm7', 'dim', 'dim7', 'm7b5', 'sus4', 'sus2', 'aug', '6', 'm6', 'add9', 'm9', 'maj9', '9', '7sus4', 'mMaj7', '13', 'm11', '69', '7b9', '7s9'];
   const TPL = (() => {
     const out = [];
-    const W = { 0: 1.0, 3: 0.95, 4: 0.95, 5: 0.75, 2: 0.6, 7: 0.55, 6: 0.8, 8: 0.8, 9: 0.75, 10: 0.85, 11: 0.85, 1: 0.55 };
+    const W = { 0: 1.0, 3: 1.0, 4: 1.0, 5: 0.75, 2: 0.55, 7: 0.7, 6: 0.85, 8: 0.85, 9: 0.75, 10: 0.9, 11: 0.9, 1: 0.6 };
     for (let root = 0; root < 12; root++) for (const q of MIC_Q) {
       const t = new Float32Array(12); let norm = 0;
       for (const iv of T.Q[q].iv) { const ic = mod(iv, 12); const w = iv >= 12 ? 0.5 : (W[ic] || 0.6); t[mod(root + ic, 12)] = Math.max(t[mod(root + ic, 12)], w); }
       for (let i = 0; i < 12; i++) norm += t[i] * t[i];
-      out.push({ root, q, t, norm: Math.sqrt(norm), size: T.Q[q].iv.length });
+      const ext = []; for (const iv of T.Q[q].iv) { const ic = mod(iv, 12); if (iv >= 12 || ((ic === 2 || ic === 9) && !/sus|^6$|^m6$/.test(q)) || (ic === 9 && /^6$|^m6$/.test(q))) ext.push(mod(root + ic, 12)); }
+      out.push({ root, q, cat: T.Q[q].cat, t, norm: Math.sqrt(norm), size: T.Q[q].iv.length, ext: [...new Set(ext)] });
     }
     return out;
   })();
@@ -365,51 +392,82 @@ const Audio = (() => {
     try {
       MIC.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 } });
     } catch (e) { return { ok: false, reason: e && e.name === 'NotAllowedError' ? 'denied' : 'unavailable', error: e }; }
+    if (ctx.state === 'suspended') { try { await ctx.resume(); } catch (e) {} }
     MIC.src = ctx.createMediaStreamSource(MIC.stream);
-    MIC.analyser = ctx.createAnalyser(); MIC.analyser.fftSize = 8192; MIC.analyser.smoothingTimeConstant = 0.55;
+    MIC.analyser = ctx.createAnalyser(); MIC.analyser.fftSize = 16384; MIC.analyser.smoothingTimeConstant = 0.2;
     MIC.src.connect(MIC.analyser);
-    MIC.active = true; MIC.current = null; MIC.ema.fill(0); MIC.emaBass.fill(0); MIC.lastLabel = null; MIC.lastCount = 0; MIC.silentSince = 0;
+    MIC.active = true; MIC.current = null; MIC.ema.fill(0); MIC.emaBass.fill(0); MIC.lastLabel = null; MIC.lastCount = 0; MIC.silentSince = 0; MIC.floor = -70; MIC.prevLevel = -100;
     const freq = new Float32Array(MIC.analyser.frequencyBinCount);
     const time = new Float32Array(2048);
-    const sr = ctx.sampleRate, N = MIC.analyser.fftSize;
-    const binOf = (f) => Math.round(f * N / sr);
+    const sr = ctx.sampleRate, N = MIC.analyser.fftSize; const hz = sr / N;
+    const lo = Math.max(2, Math.floor(50 / hz)), hi = Math.min(freq.length - 2, Math.ceil(4500 / hz));
     let last = 0;
     const loop = () => {
       if (!MIC.active) return;
       MIC.raf = requestAnimationFrame(loop);
-      const now = performance.now(); if (now - last < 55) return; last = now;
+      const now = performance.now(); if (now - last < 50) return; last = now;
       MIC.analyser.getFloatFrequencyData(freq);
       MIC.analyser.getFloatTimeDomainData(time);
       let rms = 0; for (let i = 0; i < time.length; i++) rms += time[i] * time[i]; rms = Math.sqrt(rms / time.length); MIC.level = 20 * Math.log10(rms + 1e-9);
-      // pitch salience over C2..C7 with harmonic summation; fold to chroma; a separate bass chroma from C2..G3
+      // adaptive noise floor: falls quickly, rises slowly
+      if (MIC.level < MIC.floor + 3) MIC.floor = MIC.floor * 0.7 + MIC.level * 0.3; else MIC.floor = Math.min(MIC.floor + 0.08, -35);
+      const quiet = MIC.level < Math.max(-78, MIC.floor + 9);
+      const onset = MIC.level - MIC.prevLevel > 7; MIC.prevLevel = MIC.level;
+      // spectral peaks → HPCP
       const chroma = MIC.chroma, bass = MIC.bass; chroma.fill(0); bass.fill(0);
-      const mag = (bin) => { if (bin < 1 || bin >= freq.length - 1) return 0; const db = Math.max(freq[bin - 1], freq[bin], freq[bin + 1]); return db < -100 ? 0 : Math.pow(10, db / 20); };
-      const HW = [1.0, 0.55, 0.35, 0.25, 0.18];
-      for (let m = 36; m <= 96; m++) {
-        const f0 = 440 * Math.pow(2, (m - 69) / 12);
-        let s = 0; for (let h = 1; h <= 5; h++) s += HW[h - 1] * mag(binOf(f0 * h));
-        const pc = mod(m, 12);
-        const octW = m < 48 ? 1.15 : m > 84 ? 0.6 : 1.0;
-        chroma[pc] += s * octW;
-        if (m <= 55) bass[pc] += s * (m <= 48 ? 1.2 : 0.8);
+      if (!quiet) {
+        // spectral floor in dB: median of the band, estimated cheaply from a coarse sample
+        let acc = []; for (let i = lo; i < hi; i += 7) acc.push(freq[i]); acc.sort((a, b) => a - b); const sfloor = acc[Math.floor(acc.length * 0.5)] || -100;
+        const thr = Math.max(sfloor + 14, -95);
+        let maxMag = 0; const peaks = [];
+        for (let i = lo; i < hi; i++) {
+          const d = freq[i]; if (d < thr || d < freq[i - 1] || d <= freq[i + 1]) continue;
+          // parabolic interpolation for a precise frequency
+          const a = freq[i - 1], b = d, c = freq[i + 1]; const p = 0.5 * (a - c) / (a - 2 * b + c || 1); const f = (i + p) * hz;
+          const mag = Math.pow(10, b / 20); peaks.push({ f, mag }); if (mag > maxMag) maxMag = mag;
+        }
+        // the bass is the lowest real peak (not the loudest low one): the pitch class of the lowest partial that
+        // carries at least a fifth of the strongest peak's energy
+        let lowest = null; for (const pk of peaks) { if (pk.f > 330 || pk.mag < 0.12 * maxMag) continue; if (!lowest || pk.f < lowest.f) lowest = pk; }
+        if (lowest) { const midi = Math.round(69 + 12 * Math.log2(lowest.f / 440)); bass[mod(midi, 12)] = 1; }
+        for (const pk of peaks) {
+          const m = pk.mag / (maxMag || 1); if (m < 0.02) continue;
+          const amp = Math.pow(m, 0.7); // compress dynamics so the fundamental does not drown the thirds
+          const voted = {}; // one vote per pitch class per peak (octave harmonics must not reinforce themselves)
+          for (let h = 1; h <= 4; h++) {
+            const f0 = pk.f / h; if (f0 < 55 || f0 > 2200) continue;
+            const midi = 69 + 12 * Math.log2(f0 / 440); const nearest = Math.round(midi); const dev = Math.abs(midi - nearest); if (dev > 0.35) continue;
+            const pc = mod(nearest, 12); const w = amp * Math.pow(0.55, h - 1) * (1 - dev / 0.35) * (nearest < 48 ? 1.1 : nearest > 84 ? 0.6 : 1.0);
+            if (!(voted[pc] >= w)) { chroma[pc] += w - (voted[pc] || 0); voted[pc] = w; }
+          }
+        }
+        let mx = 0; for (let i = 0; i < 12; i++) mx = Math.max(mx, chroma[i]); if (mx > 0) for (let i = 0; i < 12; i++) chroma[i] /= mx;
+        let bx = 0; for (let i = 0; i < 12; i++) bx = Math.max(bx, bass[i]); if (bx > 0) for (let i = 0; i < 12; i++) bass[i] /= bx;
       }
-      let mx = 0; for (let i = 0; i < 12; i++) mx = Math.max(mx, chroma[i]); if (mx > 0) for (let i = 0; i < 12; i++) chroma[i] /= mx;
-      let bx = 0; for (let i = 0; i < 12; i++) bx = Math.max(bx, bass[i]); if (bx > 0) for (let i = 0; i < 12; i++) bass[i] /= bx;
-      const quiet = MIC.level < -58 || mx === 0;
-      const a = quiet ? 0.5 : 0.35;
+      // smoothing; an onset (a new strike) restarts it so chords do not blend into each other
+      const a = quiet ? 0.5 : onset ? 0.85 : 0.4;
       for (let i = 0; i < 12; i++) { MIC.ema[i] = MIC.ema[i] * (1 - a) + (quiet ? 0 : chroma[i]) * a; MIC.emaBass[i] = MIC.emaBass[i] * (1 - a) + (quiet ? 0 : bass[i]) * a; }
       let best = null;
       if (!quiet) best = matchChroma(MIC.ema, MIC.emaBass);
       MIC.onFrame && MIC.onFrame({ chroma: MIC.ema, level: MIC.level, best, quiet });
-      // temporal logic: a label must win 3 frames in a row to become current; current commits when replaced or on silence
-      const label = best && best.conf > 0.08 ? `${best.root}:${best.q}:${best.bass ?? ''}` : null;
-      if (label && label === MIC.lastLabel) MIC.lastCount++; else { MIC.lastLabel = label; MIC.lastCount = 1; }
+      // temporal logic: root + family must win 3 frames in a row to become current; current commits when replaced or on silence
+      const label = best && best.conf > 0.025 ? `${best.root}:${best.cat}` : null;
+      if (label && label === MIC.lastLabel) { MIC.lastCount++; MIC.lastConf = Math.max(MIC.lastConf || 0, best.conf); } else { MIC.lastLabel = label; MIC.lastCount = 1; MIC.lastConf = best ? best.conf : 0; }
       if (quiet) { if (!MIC.silentSince) MIC.silentSince = now; } else MIC.silentSince = 0;
-      if (label && MIC.lastCount >= 3 && (!MIC.current || MIC.current.label !== label)) {
-        if (MIC.current && now - MIC.currentSince > 350 && MIC.onChord) MIC.onChord(MIC.current.chord, now - MIC.currentSince);
-        MIC.current = { label, chord: { root: best.root, q: best.q, bass: best.bass, conf: best.conf, alts: best.alts } }; MIC.currentSince = now;
-        MIC.onLive && MIC.onLive(MIC.current.chord);
-      } else if (MIC.current && MIC.silentSince && now - MIC.silentSince > 500) {
+      // a clear reading needs three frames (150 ms); a marginal one needs five and a stronger peak confidence
+      const settled = label && (MIC.lastCount >= 3 && MIC.lastConf > 0.06 || MIC.lastCount >= 5 && MIC.lastConf > 0.035);
+      if (settled) {
+        if (!MIC.current || MIC.current.label !== label) {
+          if (MIC.current && now - MIC.currentSince > 350 && MIC.onChord) MIC.onChord(MIC.current.chord, now - MIC.currentSince);
+          MIC.current = { label, chord: { root: best.root, q: best.q, bass: best.bass, conf: best.conf, alts: best.alts }, votes: {} }; MIC.currentSince = now;
+          MIC.onLive && MIC.onLive(MIC.current.chord);
+        } else {
+          // same chord still sounding: let the quality settle by vote (the first frames are the attack)
+          const v = MIC.current.votes; v[best.q] = (v[best.q] || 0) + 1; let top = MIC.current.chord.q, tv = 0; for (const q in v) if (v[q] > tv) { tv = v[q]; top = q; }
+          if (top !== MIC.current.chord.q) { MIC.current.chord.q = top; MIC.current.chord.bass = best.bass; MIC.onLive && MIC.onLive(MIC.current.chord); }
+          MIC.current.chord.conf = Math.max(MIC.current.chord.conf, best.conf); MIC.current.chord.alts = best.alts;
+        }
+      } else if (MIC.current && MIC.silentSince && now - MIC.silentSince > 450) {
         if (now - MIC.currentSince > 350 && MIC.onChord) MIC.onChord(MIC.current.chord, now - MIC.currentSince);
         MIC.current = null; MIC.onLive && MIC.onLive(null);
       }
@@ -423,19 +481,24 @@ const Audio = (() => {
     if (bm < 0.5) bassPc = -1;
     const scored = [];
     for (const tp of TPL) {
-      let dot = 0, outside = 0;
-      for (let i = 0; i < 12; i++) { if (tp.t[i] > 0) dot += ch[i] * tp.t[i]; else outside += ch[i]; }
-      let s = dot / (n * tp.norm) - 0.22 * outside / n;
-      s -= tp.size * 0.012; // prefer the simplest chord that explains the energy
-      if (bassPc >= 0) { if (bassPc === tp.root) s += 0.08; else if (tp.t[bassPc] > 0) s += 0.02; else s -= 0.05; }
-      scored.push({ s, root: tp.root, q: tp.q, tp });
+      let dot = 0, outside = 0, weak = 0;
+      // leakage from harmonics sits around 0.1–0.25 of the strongest pitch class; a chord tone needs more than that to
+      // count as present, and energy below that outside the chord is not held against it
+      for (let i = 0; i < 12; i++) { if (tp.t[i] > 0) { dot += ch[i] * tp.t[i]; if (ch[i] < 0.3) weak += tp.t[i] * (0.3 - ch[i]) / 0.3; } else outside += Math.max(0, ch[i] - 0.14); }
+      let s = dot / (n * tp.norm) - 0.35 * outside / n - 0.4 * weak / tp.norm;
+      s -= tp.size * 0.01;
+      // a color tone is claimed only when its energy is plainly there
+      for (const pc of tp.ext) if (ch[pc] < 0.4) s -= 0.3;
+      if (bassPc >= 0) { if (bassPc === tp.root) s += 0.08; else if (tp.t[bassPc] > 0) s += 0.02; else s -= 0.06; }
+      scored.push({ s, root: tp.root, q: tp.q, cat: tp.cat, tp });
     }
     scored.sort((a, b) => b.s - a.s);
     const best = scored[0]; if (!best) return null;
-    const second = scored[1] ? scored[1].s : 0;
+    // confidence: the margin over the best chord with a different root or family (siblings in color do not count)
+    const rival = scored.find(c => c.root !== best.root || c.cat !== best.cat);
     const bassFor = (c) => (bassPc >= 0 && bassPc !== c.root && c.tp.t[bassPc] > 0) ? bassPc : null;
-    const alts = scored.slice(1, 4).filter(c => c.s > best.s - 0.12).map(c => ({ root: c.root, q: c.q, bass: bassFor(c) }));
-    return { root: best.root, q: best.q, bass: bassFor(best), conf: Math.max(0, best.s - second), score: best.s, alts };
+    const alts = []; for (const c of scored.slice(1)) { if (alts.length >= 3) break; if (c.root === best.root && c.cat === best.cat) continue; if (c.s < best.s - 0.15) break; alts.push({ root: c.root, q: c.q, bass: bassFor(c) }); }
+    return { root: best.root, q: best.q, cat: best.cat, bass: bassFor(best), conf: Math.max(0, best.s - (rival ? rival.s : 0)), score: best.s, alts };
   }
   function micStop() {
     MIC.active = false; if (MIC.raf) cancelAnimationFrame(MIC.raf);

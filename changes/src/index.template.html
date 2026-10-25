@@ -145,9 +145,10 @@ h3{margin:0;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:v
 .lens{display:flex;flex-direction:column;gap:10px}
 .depth{display:flex;align-items:center;gap:6px}
 .depth .dots{display:flex;gap:4px}
-.depth .dots i{width:10px;height:10px;border-radius:50%;background:var(--line2);display:block}
+.depth .dots i{width:8px;height:8px;border-radius:50%;background:var(--line2);display:block}
 .depth .dots i.on{background:var(--accent)}
 .depth .dots i.cap{opacity:.35}
+button.playing{background:var(--accent);color:var(--bg);border-color:var(--accent)}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:14px;display:flex;flex-direction:column;gap:10px;min-width:0}
 .card.open{border-color:var(--line2)}
 .card .head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
@@ -330,7 +331,7 @@ kbd{font-family:var(--mono);background:var(--panel2);border:1px solid var(--line
         <div class="seg" id="styleSeg" role="tablist" aria-label="Style"></div>
         <div class="row between">
           <div class="depth"><span class="hint">Depth</span><button class="small icon" id="depthDown" aria-label="Less depth">−</button><div class="dots" id="depthDots"></div><button class="small icon" id="depthUp" aria-label="More depth">+</button></div>
-          <span class="hint" id="styleBlurb"></span>
+          <span class="hint" id="styleBlurb" style="display:block;margin-top:6px;line-height:1.4"></span>
         </div>
         <div id="moodChips"></div>
       </div>

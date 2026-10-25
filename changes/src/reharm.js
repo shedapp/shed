@@ -75,7 +75,7 @@ const Reharm = (() => {
   // recolor(c, key, depth, i, prog) → quality id or null. Only upgrades (never removes color the writer chose).
   const STYLES = {
     pop: {
-      id: 'pop', name: 'Pop', blurb: 'Singer-songwriter and modern pop: colors, slash bass lines, a borrowed chord at the right moment.', ceiling: 3,
+      id: 'pop', name: 'Pop', blurb: 'Singer-songwriter and modern pop: colors, slash bass lines, a borrowed chord at the right moment.', ceiling: 6,
       recolor(c, key, d, i, prog) {
         const r = rel(c, key), k = cat(c), major = key.mode === 'major';
         if (d < 2) return null;
@@ -90,10 +90,10 @@ const Reharm = (() => {
         }
         return null;
       },
-      t: { recolor: [1, 1.0], sus: [1, 0.9], slashBass: [1, 1.2], twoFive: [2, 0.6], secondaryDom: [3, 0.9], fnSwap: [2, 0.8], deceptive: [2, 0.7], minorPlagal: [2, 1.4], flatSix: [3, 0.9], flatSeven: [2, 1.1], mario: [3, 0.9], picardy: [3, 0.6], lydianII: [3, 0.5], lineCliche: [3, 0.8], susHybrid: [3, 0.7], passingDim: [3, 0.5], chromaticMediant: [3, 0.6], parallelMinor: [3, 0.6], backdoor: [3, 0.4], walkDown: [2, 1.3], planeUp: [2, 0.8], sequenceFifths: [3, 0.6], lament: [2, 1.0], deceptiveSecondary: [3, 0.6], bluesSevenths: [2, 0.7], hybridCadence: [3, 0.7], canon: [2, 0.9], dominantPedal: [3, 0.6], modalCast: [3, 0.7] },
+      t: { recolor: [1, 1.0], sus: [1, 0.9], slashBass: [1, 1.2], twoFive: [2, 0.6], secondaryDom: [3, 0.9], fnSwap: [2, 0.8], deceptive: [2, 0.7], minorPlagal: [2, 1.4], flatSix: [3, 0.9], flatSeven: [2, 1.1], mario: [3, 0.9], picardy: [3, 0.6], lydianII: [3, 0.5], lineCliche: [3, 0.8], susHybrid: [3, 0.7], passingDim: [3, 0.5], chromaticMediant: [3, 0.6], parallelMinor: [3, 0.6], backdoor: [3, 0.4], walkDown: [2, 1.3], planeUp: [2, 0.8], sequenceFifths: [3, 0.6], lament: [2, 1.0], deceptiveSecondary: [3, 0.6], bluesSevenths: [2, 0.7], hybridCadence: [3, 0.7], canon: [2, 0.9], dominantPedal: [3, 0.6], modalCast: [3, 0.7], susResolve: [3, 0.8], sideslip: [5, 0.8], everyTarget: [6, 0.9], melodyReharm: [6, 1.4], keyLift: [6, 1.0] },
     },
     neosoul: {
-      id: 'neosoul', name: 'Neo-soul', blurb: 'Neo-soul and R&B: 9ths and 11ths, sus hybrids, Lydian IV, planing, pedal bass. Warm and floating.', ceiling: 5,
+      id: 'neosoul', name: 'Neo-soul', blurb: 'Neo-soul and R&B: 9ths and 11ths, sus hybrids, Lydian IV, planing, pedal bass. Warm and floating.', ceiling: 8,
       recolor(c, key, d, i, prog) {
         const r = rel(c, key), k = cat(c), major = key.mode === 'major';
         if (major) {
@@ -117,10 +117,10 @@ const Reharm = (() => {
         }
         return null;
       },
-      t: { recolor: [1, 1.4], slashBass: [1, 0.7], pedal: [3, 1.0], twoFive: [2, 0.8], secondaryDom: [2, 0.7], fnSwap: [2, 0.8], deceptive: [2, 0.5], backdoor: [3, 0.9], turnaround: [3, 0.6], minorPlagal: [2, 1.0], flatSix: [3, 0.9], flatSeven: [3, 0.6], lydianII: [4, 0.7], halfDimTwo: [3, 0.8], planing: [4, 1.3], noLanding: [3, 1.0], passingDim: [4, 0.5], tritoneSub: [4, 0.8], chromaticMediant: [4, 0.8], lineCliche: [3, 0.7], susHybrid: [3, 1.3], lydianIV: [4, 1.2], altered: [4, 0.5], constant: [4, 0.6], dorian: [2, 1.0], walkDown: [2, 0.8], chromaticMinorDescent: [3, 1.4], slideMinorThird: [3, 1.0], loopTwoFive: [3, 0.9], minorTwoFive: [3, 0.7], backcycle: [4, 0.6], lament: [2, 0.8], importantMinor: [3, 0.8], hybridCadence: [3, 1.1], quartalVamp: [4, 1.0], twoStep: [4, 0.7], dominantPedal: [3, 0.6], modalCast: [3, 0.7], dominantFamily: [4, 0.6], constantThirds: [4, 0.5] },
+      t: { recolor: [1, 1.4], slashBass: [1, 0.7], pedal: [3, 1.0], twoFive: [2, 0.8], secondaryDom: [2, 0.7], fnSwap: [2, 0.8], deceptive: [2, 0.5], backdoor: [3, 0.9], turnaround: [3, 0.6], minorPlagal: [2, 1.0], flatSix: [3, 0.9], flatSeven: [3, 0.6], lydianII: [4, 0.7], halfDimTwo: [3, 0.8], planing: [4, 1.3], noLanding: [3, 1.0], passingDim: [4, 0.5], tritoneSub: [4, 0.8], chromaticMediant: [4, 0.8], lineCliche: [3, 0.7], susHybrid: [3, 1.3], lydianIV: [4, 1.2], altered: [4, 0.5], constant: [4, 0.6], dorian: [2, 1.0], walkDown: [2, 0.8], chromaticMinorDescent: [3, 1.4], slideMinorThird: [3, 1.0], loopTwoFive: [3, 0.9], minorTwoFive: [3, 0.7], backcycle: [4, 0.6], lament: [2, 0.8], importantMinor: [3, 0.8], hybridCadence: [3, 1.1], quartalVamp: [4, 1.0], twoStep: [4, 0.7], dominantPedal: [3, 0.6], modalCast: [3, 0.7], dominantFamily: [4, 0.6], constantThirds: [4, 0.5], susResolve: [2, 1.0], sideslip: [4, 1.2], hendrix: [5, 1.0], upperStructure: [5, 1.1], susCast: [6, 1.2], everyTarget: [6, 0.9], melodyReharm: [7, 1.6], keyLift: [7, 1.0], sideslipAll: [7, 1.0], tritoneAll: [7, 0.8], pivotModulation: [8, 1.2] },
     },
     gospel: {
-      id: 'gospel', name: 'Gospel', blurb: 'Contemporary gospel: 2-5-1s with 13ths, passing diminisheds, chromatic walk-ups, tritone subs, altered dominants. Church.', ceiling: 5,
+      id: 'gospel', name: 'Gospel', blurb: 'Contemporary gospel: 2-5-1s with 13ths, passing diminisheds, chromatic walk-ups, tritone subs, altered dominants, 7♯9 planing, shout turnarounds. Church.', ceiling: 8,
       recolor(c, key, d, i, prog) {
         const r = rel(c, key), k = cat(c), major = key.mode === 'major';
         if (major) {
@@ -143,10 +143,10 @@ const Reharm = (() => {
         }
         return null;
       },
-      t: { recolor: [1, 1.2], sus: [1, 1.0], slashBass: [1, 1.0], pedal: [3, 0.5], twoFive: [2, 1.2], secondaryDom: [2, 1.2], fnSwap: [2, 0.6], deceptive: [2, 0.6], backdoor: [3, 0.9], turnaround: [3, 1.2], minorPlagal: [2, 1.0], flatSix: [3, 0.8], mario: [3, 0.6], picardy: [2, 0.8], halfDimTwo: [3, 0.8], passingDim: [3, 1.5], gospelWalk: [3, 1.6], ctDim: [4, 0.8], tritoneSub: [3, 1.2], tritoneChain: [4, 1.0], gospelWalkUp: [4, 1.3], domChainDown: [5, 1.0], susHybrid: [3, 1.0], altered: [4, 1.2], sixthDim: [5, 0.9], lineCliche: [3, 0.6], walkDown: [2, 1.0], gospelDescent: [3, 1.4], backcycle: [4, 1.3], minorTwoFive: [3, 0.9], preacher: [4, 1.1], chromaticMinorDescent: [4, 0.8], dameron: [5, 0.7], lament: [2, 0.7], dominantFamily: [4, 1.1], importantMinor: [3, 1.0], minorSixthDim: [4, 0.9], deceptiveSecondary: [3, 0.9], bluesSevenths: [2, 1.0], hybridCadence: [3, 1.0], twoStep: [3, 1.4], dominantPedal: [4, 0.7], quartalVamp: [5, 0.5] },
+      t: { recolor: [1, 1.2], sus: [1, 1.0], slashBass: [1, 1.0], pedal: [3, 0.5], twoFive: [2, 1.2], secondaryDom: [2, 1.2], fnSwap: [2, 0.6], deceptive: [2, 0.6], backdoor: [3, 0.9], turnaround: [3, 1.2], minorPlagal: [2, 1.0], flatSix: [3, 0.8], mario: [3, 0.6], picardy: [2, 0.8], halfDimTwo: [3, 0.8], passingDim: [3, 1.5], gospelWalk: [3, 1.6], ctDim: [4, 0.8], tritoneSub: [3, 1.2], tritoneChain: [4, 1.0], gospelWalkUp: [4, 1.3], domChainDown: [5, 1.0], susHybrid: [3, 1.0], altered: [4, 1.2], sixthDim: [5, 0.9], lineCliche: [3, 0.6], walkDown: [2, 1.0], gospelDescent: [3, 1.4], backcycle: [4, 1.3], minorTwoFive: [3, 0.9], preacher: [4, 1.1], chromaticMinorDescent: [4, 0.8], dameron: [5, 0.7], lament: [2, 0.7], dominantFamily: [4, 1.1], importantMinor: [3, 1.0], minorSixthDim: [4, 0.9], deceptiveSecondary: [3, 0.9], bluesSevenths: [2, 1.0], hybridCadence: [3, 1.0], twoStep: [3, 1.4], dominantPedal: [4, 0.7], quartalVamp: [5, 0.5], susResolve: [2, 1.3], hendrix: [4, 1.3], sideslip: [5, 1.1], upperStructure: [5, 1.1], shoutTurn: [6, 1.6], everyTarget: [6, 1.4], tritoneAll: [6, 1.1], melodyReharm: [7, 1.5], keyLift: [7, 1.3], sideslipAll: [7, 0.9], pivotModulation: [8, 1.0] },
     },
     jazz: {
-      id: 'jazz', name: 'Jazz', blurb: 'Standards to postbop: ii–V insertion, tritone subs, the backdoor, Coltrane cycles, altered dominants, rootless voicings.', ceiling: 5,
+      id: 'jazz', name: 'Jazz', blurb: 'Standards to postbop: ii–V insertion, tritone subs, the backdoor, Coltrane cycles, altered dominants, upper structures, Barry Harris. Standards to postbop.', ceiling: 8,
       recolor(c, key, d, i, prog) {
         const r = rel(c, key), k = cat(c), major = key.mode === 'major';
         if (major) {
@@ -170,15 +170,15 @@ const Reharm = (() => {
         }
         return null;
       },
-      t: { recolor: [1, 1.2], slashBass: [2, 0.4], twoFive: [1, 1.4], secondaryDom: [2, 1.0], fnSwap: [1, 0.7], deceptive: [2, 0.6], backdoor: [2, 1.3], turnaround: [2, 1.2], minorPlagal: [2, 0.8], flatSix: [3, 0.6], halfDimTwo: [3, 0.9], planing: [4, 0.6], passingDim: [3, 1.0], ctDim: [4, 0.7], tritoneSub: [3, 1.5], tritoneChain: [4, 1.2], susHybrid: [3, 0.8], lydianIV: [4, 0.9], altered: [4, 1.3], constant: [5, 0.8], sixthDim: [5, 0.9], coltrane: [5, 1.0], lineCliche: [3, 0.5], chromaticMediant: [4, 0.4], chromaticMinorDescent: [4, 1.0], backcycle: [4, 1.1], dameron: [5, 1.0], minorTwoFive: [3, 1.1], sequenceFifths: [3, 0.7], lament: [2, 0.8], slideMinorThird: [4, 0.5], dominantFamily: [4, 1.2], importantMinor: [3, 0.9], minorSixthDim: [4, 1.0], deceptiveSecondary: [3, 0.7], constantThirds: [5, 0.9], countdown: [5, 1.2], quartalVamp: [4, 1.0], twoStep: [3, 0.8], modalCast: [4, 0.5], hybridCadence: [3, 0.6] },
+      t: { recolor: [1, 1.2], slashBass: [2, 0.4], twoFive: [1, 1.4], secondaryDom: [2, 1.0], fnSwap: [1, 0.7], deceptive: [2, 0.6], backdoor: [2, 1.3], turnaround: [2, 1.2], minorPlagal: [2, 0.8], flatSix: [3, 0.6], halfDimTwo: [3, 0.9], planing: [4, 0.6], passingDim: [3, 1.0], ctDim: [4, 0.7], tritoneSub: [3, 1.5], tritoneChain: [4, 1.2], susHybrid: [3, 0.8], lydianIV: [4, 0.9], altered: [4, 1.3], constant: [5, 0.8], sixthDim: [5, 0.9], coltrane: [5, 1.0], lineCliche: [3, 0.5], chromaticMediant: [4, 0.4], chromaticMinorDescent: [4, 1.0], backcycle: [4, 1.1], dameron: [5, 1.0], minorTwoFive: [3, 1.1], sequenceFifths: [3, 0.7], lament: [2, 0.8], slideMinorThird: [4, 0.5], dominantFamily: [4, 1.2], importantMinor: [3, 0.9], minorSixthDim: [4, 1.0], deceptiveSecondary: [3, 0.7], constantThirds: [5, 0.9], countdown: [5, 1.2], quartalVamp: [4, 1.0], twoStep: [3, 0.8], modalCast: [4, 0.5], hybridCadence: [3, 0.6], susResolve: [3, 0.7], sideslip: [4, 1.0], upperStructure: [5, 1.4], hendrix: [5, 0.6], everyTarget: [6, 1.3], tritoneAll: [6, 1.2], shoutTurn: [6, 0.9], melodyReharm: [7, 1.6], susCast: [7, 0.8], keyLift: [7, 0.8], sideslipAll: [7, 0.8], pivotModulation: [8, 1.3] },
     },
     classical: {
-      id: 'classical', name: 'Classical', blurb: 'Common-practice and Romantic harmony: inversions and suspensions, applied chords, the Neapolitan, augmented sixths, deceptive cadences, chromatic mediants.', ceiling: 5,
+      id: 'classical', name: 'Classical', blurb: 'Common-practice and Romantic harmony: inversions and suspensions, applied chords, the Neapolitan, augmented sixths, deceptive cadences, chromatic mediants, modulation by thirds.', ceiling: 7,
       recolor() { return null; },
-      t: { slashBass: [1, 1.4], sus: [1, 0.8], secondaryDom: [2, 1.2], deceptive: [2, 1.2], minorPlagal: [2, 1.0], flatSix: [2, 0.9], picardy: [2, 1.0], neapolitan: [3, 1.3], passingDim: [3, 0.9], ctDim: [4, 1.0], augSixth: [3, 1.4], chromaticMediant: [4, 1.0], parallelMinor: [3, 0.7], lineCliche: [3, 0.6], hexPole: [4, 0.6], walkDown: [2, 1.0], sequenceFifths: [2, 1.3], lament: [2, 1.4], pantriadic: [4, 0.8], planeUp: [3, 0.6], augSixthVariants: [3, 1.2], canon: [2, 1.2], dominantPedal: [3, 1.0], deceptiveSecondary: [3, 0.9], modalCast: [4, 0.5], constantThirds: [4, 0.6] },
+      t: { slashBass: [1, 1.4], sus: [1, 0.8], secondaryDom: [2, 1.2], deceptive: [2, 1.2], minorPlagal: [2, 1.0], flatSix: [2, 0.9], picardy: [2, 1.0], neapolitan: [3, 1.3], passingDim: [3, 0.9], ctDim: [4, 1.0], augSixth: [3, 1.4], chromaticMediant: [4, 1.0], parallelMinor: [3, 0.7], lineCliche: [3, 0.6], hexPole: [4, 0.6], walkDown: [2, 1.0], sequenceFifths: [2, 1.3], lament: [2, 1.4], pantriadic: [4, 0.8], planeUp: [3, 0.6], augSixthVariants: [3, 1.2], canon: [2, 1.2], dominantPedal: [3, 1.0], deceptiveSecondary: [3, 0.9], modalCast: [4, 0.5], constantThirds: [4, 0.6], pivotModulation: [6, 1.5], melodyReharm: [7, 1.0], keyLift: [7, 0.6] },
     },
     film: {
-      id: 'film', name: 'Film', blurb: 'Orchestral and cinematic: chromatic mediants for wonder, Lydian lifts, the Mario cadence, pedal points, planing triads.', ceiling: 5,
+      id: 'film', name: 'Film', blurb: 'Orchestral and cinematic: chromatic mediants for wonder, Lydian lifts, the Mario cadence, pedal points, planing triads, modulations.', ceiling: 7,
       recolor(c, key, d, i, prog) {
         const r = rel(c, key), k = cat(c);
         if (d < 2) return null;
@@ -187,10 +187,10 @@ const Reharm = (() => {
         if ((r === 9 || r === 2) && k === 'min' && d >= 3) return 'madd9';
         return null;
       },
-      t: { recolor: [2, 0.7], sus: [1, 1.0], slashBass: [1, 0.9], pedal: [3, 1.1], deceptive: [2, 0.6], minorPlagal: [2, 1.2], flatSix: [2, 1.3], flatSeven: [2, 1.0], mario: [3, 1.4], picardy: [2, 0.7], lydianII: [3, 1.4], neapolitan: [4, 0.5], chromaticMediant: [3, 1.6], parallelMinor: [3, 1.0], hexPole: [4, 1.0], augSixth: [4, 0.5], lydianIV: [4, 0.8], lineCliche: [3, 0.5], susHybrid: [4, 0.5], walkDown: [2, 0.7], pantriadic: [3, 1.5], planeUp: [2, 1.0], lament: [2, 1.1], sequenceFifths: [3, 0.5], hybridCadence: [3, 1.2], dominantPedal: [3, 1.3], modalCast: [2, 1.4], constantThirds: [4, 1.1], canon: [2, 0.6], augSixthVariants: [4, 0.6], quartalVamp: [4, 0.7] },
+      t: { recolor: [2, 0.7], sus: [1, 1.0], slashBass: [1, 0.9], pedal: [3, 1.1], deceptive: [2, 0.6], minorPlagal: [2, 1.2], flatSix: [2, 1.3], flatSeven: [2, 1.0], mario: [3, 1.4], picardy: [2, 0.7], lydianII: [3, 1.4], neapolitan: [4, 0.5], chromaticMediant: [3, 1.6], parallelMinor: [3, 1.0], hexPole: [4, 1.0], augSixth: [4, 0.5], lydianIV: [4, 0.8], lineCliche: [3, 0.5], susHybrid: [4, 0.5], walkDown: [2, 0.7], pantriadic: [3, 1.5], planeUp: [2, 1.0], lament: [2, 1.1], sequenceFifths: [3, 0.5], hybridCadence: [3, 1.2], dominantPedal: [3, 1.3], modalCast: [2, 1.4], constantThirds: [4, 1.1], canon: [2, 0.6], augSixthVariants: [4, 0.6], quartalVamp: [4, 0.7], susCast: [5, 0.8], sideslip: [5, 0.8], pivotModulation: [6, 1.5], keyLift: [6, 1.2], melodyReharm: [7, 1.2], sideslipAll: [7, 0.8] },
     },
     lofi: {
-      id: 'lofi', name: 'Lo-fi', blurb: 'Hip-hop and lo-fi loops: m9 and maj9 planing, Dorian vamps, ii–V with no I, loops that never land.', ceiling: 3,
+      id: 'lofi', name: 'Lo-fi', blurb: 'Hip-hop and lo-fi loops: m9 and maj9 planing, Dorian vamps, ii–V with no I, loops that never land.', ceiling: 6,
       recolor(c, key, d, i, prog) {
         const r = rel(c, key), k = cat(c), major = key.mode === 'major';
         if (major) {
@@ -209,23 +209,85 @@ const Reharm = (() => {
         }
         return null;
       },
-      t: { recolor: [1, 1.5], pedal: [3, 0.7], twoFive: [2, 0.7], fnSwap: [2, 0.9], minorPlagal: [2, 1.0], flatSeven: [2, 0.8], flatSix: [3, 0.6], planing: [3, 1.4], noLanding: [2, 1.5], dorian: [2, 1.4], susHybrid: [3, 1.0], lydianIV: [3, 0.8], chromaticMediant: [3, 0.6], lineCliche: [3, 0.5], tritoneSub: [3, 0.5], backdoor: [3, 0.6], chromaticMinorDescent: [3, 1.2], slideMinorThird: [2, 1.2], loopTwoFive: [2, 1.4], lament: [2, 0.8], walkDown: [2, 0.6], quartalVamp: [3, 1.2], hybridCadence: [3, 0.8], modalCast: [2, 0.9], importantMinor: [3, 0.6], bluesSevenths: [2, 0.7] },
+      t: { recolor: [1, 1.5], pedal: [3, 0.7], twoFive: [2, 0.7], fnSwap: [2, 0.9], minorPlagal: [2, 1.0], flatSeven: [2, 0.8], flatSix: [3, 0.6], planing: [3, 1.4], noLanding: [2, 1.5], dorian: [2, 1.4], susHybrid: [3, 1.0], lydianIV: [3, 0.8], chromaticMediant: [3, 0.6], lineCliche: [3, 0.5], tritoneSub: [3, 0.5], backdoor: [3, 0.6], chromaticMinorDescent: [3, 1.2], slideMinorThird: [2, 1.2], loopTwoFive: [2, 1.4], lament: [2, 0.8], walkDown: [2, 0.6], quartalVamp: [3, 1.2], hybridCadence: [3, 0.8], modalCast: [2, 0.9], importantMinor: [3, 0.6], bluesSevenths: [2, 0.7], susResolve: [3, 0.6], sideslip: [4, 1.2], susCast: [5, 1.2], upperStructure: [5, 0.6], melodyReharm: [6, 1.2], sideslipAll: [6, 0.9] },
+    },
+    brazil: {
+      id: 'brazil', name: 'Brazil', blurb: 'Bossa nova and MPB: 6/9 tonics, m9 with descending bass, ii–V with ♭9 and ♯11, ♭VII7♯11, chromatic bass lines (Jobim, Ivan Lins, Djavan).', ceiling: 7,
+      recolor(c, key, d, i, prog) {
+        const r = rel(c, key), k = cat(c), major = key.mode === 'major';
+        if (major) {
+          if (r === 0 && k === 'maj') return d >= 3 ? '69' : 'maj7';
+          if (r === 5 && k === 'maj') return d >= 3 ? 'maj7s11' : 'maj7';
+          if ((r === 2 || r === 9 || r === 4) && k === 'min') return d >= 2 ? 'm9' : 'm7';
+          if (r === 7 && (k === 'maj' || k === 'dom')) return d >= 4 ? '13b9' : d >= 2 ? '7b9' : '7';
+          if (r === 10 && (k === 'maj' || k === 'dom')) return d >= 2 ? '7s11' : '7';
+          if (r === 11 && k === 'dim') return 'm7b5';
+          if (r === 8 && k === 'maj') return 'maj7';
+        } else {
+          if (r === 0 && k === 'min') return d >= 3 ? 'm6/9' : d >= 2 ? 'm9' : 'm7';
+          if (r === 5 && k === 'min') return d >= 2 ? 'm9' : 'm7';
+          if (r === 7 && (k === 'maj' || k === 'dom')) return d >= 3 ? '7b9' : '7';
+          if (r === 8 && k === 'maj') return 'maj7';
+          if (r === 3 && k === 'maj') return d >= 2 ? 'maj9' : 'maj7';
+          if (r === 10 && (k === 'maj' || k === 'dom')) return '7s11';
+          if (r === 2 && k === 'dim') return 'm7b5';
+        }
+        return null;
+      },
+      t: { recolor: [1, 1.3], slashBass: [1, 1.0], walkDown: [2, 1.2], twoFive: [1, 1.2], secondaryDom: [2, 1.0], fnSwap: [2, 0.7], minorPlagal: [2, 1.0], backdoor: [3, 1.0], flatSeven: [2, 0.8], turnaround: [3, 0.8], lineCliche: [3, 1.1], tritoneSub: [3, 1.2], halfDimTwo: [3, 1.0], passingDim: [3, 0.9], chromaticMinorDescent: [3, 1.2], susHybrid: [3, 0.7], altered: [4, 0.8], tritoneChain: [4, 1.0], lydianIV: [4, 0.9], ctDim: [4, 0.7], chromaticMediant: [4, 0.8], constant: [5, 0.9], sideslip: [5, 1.0], susResolve: [3, 0.6], everyTarget: [6, 1.2], tritoneAll: [6, 1.0], melodyReharm: [7, 1.4], pivotModulation: [7, 1.3] },
+    },
+    blues: {
+      id: 'blues', name: 'Blues', blurb: 'Blues and soul: dominant 7ths and 9ths everywhere, 7♯9, the quick IV, passing diminisheds, chromatic walk-ups, the 1–6–2–5 turnaround.', ceiling: 6,
+      recolor(c, key, d, i, prog) {
+        const r = rel(c, key), k = cat(c);
+        if (r === 0 && (k === 'maj' || k === 'dom')) return d >= 3 ? '13' : d >= 2 ? '9' : '7';
+        if (r === 5 && (k === 'maj' || k === 'dom')) return d >= 3 ? '13' : d >= 2 ? '9' : '7';
+        if (r === 7 && (k === 'maj' || k === 'dom')) return d >= 4 ? '7s9' : d >= 2 ? '9' : '7';
+        if ((r === 2 || r === 9) && k === 'min') return d >= 2 ? 'm9' : 'm7';
+        if (r === 10 && (k === 'maj' || k === 'dom')) return d >= 2 ? '9' : '7';
+        return null;
+      },
+      t: { recolor: [1, 1.5], slashBass: [1, 0.6], bluesSevenths: [1, 1.5], twoFive: [2, 0.6], secondaryDom: [2, 1.0], turnaround: [2, 1.3], minorPlagal: [2, 0.8], flatSeven: [2, 0.7], passingDim: [3, 1.2], gospelWalkUp: [3, 1.2], tritoneSub: [3, 1.0], backdoor: [3, 0.8], hendrix: [3, 1.4], susResolve: [3, 0.8], dominantFamily: [4, 1.0], altered: [4, 0.9], tritoneChain: [4, 0.8], ctDim: [4, 0.7], sideslip: [5, 1.0], upperStructure: [5, 1.0], shoutTurn: [5, 1.3], everyTarget: [6, 1.0], tritoneAll: [6, 0.9] },
+    },
+    modern: {
+      id: 'modern', name: 'Lab', blurb: 'The laboratory: negative harmony, sideslips, half-step lifts, upper structures, constant structures, polychords, modulation by thirds — Collier, Hancock, Molina, Cory Henry.', ceiling: 8,
+      recolor(c, key, d, i, prog) {
+        const r = rel(c, key), k = cat(c), major = key.mode === 'major';
+        if (k === 'maj') return d >= 4 ? (r === 5 || r === 10 ? 'maj7s11' : 'maj9') : 'maj7';
+        if (k === 'min') return d >= 3 ? 'm11' : 'm9';
+        if (k === 'dom') return d >= 4 ? '13s11' : '13';
+        if (k === 'dim') return 'm7b5';
+        return null;
+      },
+      t: { recolor: [1, 1.0], slashBass: [1, 0.8], sus: [1, 0.6], pedal: [2, 1.0], susHybrid: [2, 1.0], lydianIV: [2, 1.2], lydianII: [3, 1.0], chromaticMediant: [3, 1.3], hexPole: [3, 1.0], planing: [3, 1.2], constant: [4, 1.3], constantThirds: [4, 1.0], pantriadic: [4, 1.0], quartalVamp: [4, 1.0], tritoneSub: [3, 0.8], altered: [4, 0.8], coltrane: [5, 1.0], countdown: [5, 0.8], sideslip: [4, 1.4], upperStructure: [5, 1.3], hendrix: [5, 0.8], susCast: [5, 1.2], modalCast: [4, 1.0], dominantPedal: [4, 0.8], sideslipAll: [6, 1.3], everyTarget: [6, 0.8], tritoneAll: [6, 1.0], shoutTurn: [6, 0.7], melodyReharm: [7, 1.8], keyLift: [7, 1.5], pivotModulation: [8, 1.4] },
     },
   };
-  const STYLE_ORDER = ['pop', 'neosoul', 'gospel', 'jazz', 'classical', 'film', 'lofi'];
+  const STYLE_ORDER = ['pop', 'neosoul', 'gospel', 'jazz', 'blues', 'brazil', 'classical', 'film', 'lofi', 'modern'];
+  // depth levels, 1–8
+  const DEPTHS = [
+    { n: 1, name: 'Color', blurb: 'Extensions and suspensions on the chords you have.' },
+    { n: 2, name: 'Lines', blurb: 'Bass lines, inversions, a borrowed chord.' },
+    { n: 3, name: 'Function', blurb: 'Secondary dominants, ii–Vs, the backdoor, deceptive moves.' },
+    { n: 4, name: 'Chromatic', blurb: 'Tritone subs, passing diminisheds, altered dominants, planing.' },
+    { n: 5, name: 'Systems', blurb: 'Coltrane, Barry Harris, constant structures, upper structures, sideslips.' },
+    { n: 6, name: 'Rewrites', blurb: 'Whole-phrase rewrites: a 2–5 into everything, shout turnarounds, casts.' },
+    { n: 7, name: 'Reharm', blurb: 'New roots under your melody, half-step lifts, sideslipping the whole phrase.' },
+    { n: 8, name: 'Lab', blurb: 'Modulation by thirds, polychords, everything at once.' },
+  ];
 
   // Style-flavored chord qualities for new chords
   const Qs = {
-    ii(style, d) { return ({ pop: 'min', film: 'min', classical: 'min', neosoul: d >= 3 ? 'm11' : 'm9', gospel: 'm9', jazz: d >= 3 ? 'm9' : 'm7', lofi: 'm9' })[style]; },
-    V(style, d) { return ({ pop: 'maj', film: 'maj', classical: '7', neosoul: d >= 3 ? '13sus4' : '9sus4', gospel: d >= 3 ? '13' : '9', jazz: d >= 3 ? '13' : '7', lofi: '9sus4' })[style]; },
-    V7(style, d) { return ({ pop: '7', film: '7', classical: '7', neosoul: '9', gospel: d >= 4 ? '13b9' : '13', jazz: d >= 3 ? '13' : '7', lofi: '9' })[style]; },
-    secV(style, d) { return ({ pop: '7', film: '7', classical: '7', neosoul: '9', gospel: d >= 4 ? '7s9' : '7', jazz: d >= 3 ? '7b9' : '7', lofi: '9' })[style]; },
-    minor(style, d) { return ({ pop: 'min', film: 'min', classical: 'min', neosoul: d >= 2 ? 'm9' : 'm7', gospel: d >= 2 ? 'm9' : 'm7', jazz: 'm7', lofi: 'm9' })[style]; },
-    major(style, d) { return ({ pop: 'maj', film: 'maj', classical: 'maj', neosoul: d >= 2 ? 'maj9' : 'maj7', gospel: d >= 2 ? 'maj9' : 'maj7', jazz: 'maj7', lofi: 'maj9' })[style]; },
-    iv(style, d) { return ({ pop: 'min', film: 'min', classical: 'min', neosoul: 'm6', gospel: d >= 3 ? 'm6/9' : 'm6', jazz: 'm6', lofi: 'm9' })[style]; },
-    bVII(style, d) { return ({ pop: 'maj', film: 'maj', classical: 'maj', neosoul: '9', gospel: '13', jazz: '9', lofi: 'maj7' })[style]; },
-    subV(style, d) { return ({ pop: '7', film: '7', classical: '7', neosoul: '13sus4', gospel: d >= 4 ? '13' : '7s11', jazz: d >= 4 ? '7s11' : '9', lofi: '9' })[style]; },
+    ii(style, d) { return ({ pop: 'min', film: 'min', classical: 'min', neosoul: d >= 3 ? 'm11' : 'm9', gospel: 'm9', jazz: d >= 3 ? 'm9' : 'm7', lofi: 'm9', brazil: 'm9', blues: 'm7', modern: 'm11' })[style]; },
+    V(style, d) { return ({ pop: 'maj', film: 'maj', classical: '7', neosoul: d >= 3 ? '13sus4' : '9sus4', gospel: d >= 3 ? '13' : '9', jazz: d >= 3 ? '13' : '7', lofi: '9sus4', brazil: d >= 3 ? '13b9' : '7b9', blues: d >= 3 ? '13' : '9', modern: d >= 4 ? '13s11' : '13sus4' })[style]; },
+    V7(style, d) { return ({ pop: '7', film: '7', classical: '7', neosoul: '9', gospel: d >= 4 ? '13b9' : '13', jazz: d >= 3 ? '13' : '7', lofi: '9', brazil: d >= 3 ? '13b9' : '7b9', blues: d >= 3 ? '7s9' : '9', modern: '13s11' })[style]; },
+    secV(style, d) { return ({ pop: '7', film: '7', classical: '7', neosoul: '9', gospel: d >= 4 ? '7s9' : '7', jazz: d >= 3 ? '7b9' : '7', lofi: '9', brazil: '7b9', blues: d >= 3 ? '7s9' : '7', modern: d >= 5 ? '7alt' : '7b9' })[style]; },
+    minor(style, d) { return ({ pop: 'min', film: 'min', classical: 'min', neosoul: d >= 2 ? 'm9' : 'm7', gospel: d >= 2 ? 'm9' : 'm7', jazz: 'm7', lofi: 'm9', brazil: d >= 2 ? 'm9' : 'm7', blues: 'm7', modern: d >= 3 ? 'm11' : 'm9' })[style]; },
+    major(style, d) { return ({ pop: 'maj', film: 'maj', classical: 'maj', neosoul: d >= 2 ? 'maj9' : 'maj7', gospel: d >= 2 ? 'maj9' : 'maj7', jazz: 'maj7', lofi: 'maj9', brazil: d >= 2 ? '69' : 'maj7', blues: d >= 2 ? '9' : '7', modern: d >= 4 ? 'maj7s11' : 'maj9' })[style]; },
+    iv(style, d) { return ({ pop: 'min', film: 'min', classical: 'min', neosoul: 'm6', gospel: d >= 3 ? 'm6/9' : 'm6', jazz: 'm6', lofi: 'm9', brazil: 'm6', blues: 'm6', modern: 'm6/9' })[style]; },
+    bVII(style, d) { return ({ pop: 'maj', film: 'maj', classical: 'maj', neosoul: '9', gospel: '13', jazz: '9', lofi: 'maj7', brazil: '7s11', blues: '9', modern: '13s11' })[style]; },
+    subV(style, d) { return ({ pop: '7', film: '7', classical: '7', neosoul: '13sus4', gospel: d >= 4 ? '13' : '7s11', jazz: d >= 4 ? '7s11' : '9', lofi: '9', brazil: '7s11', blues: '7s9', modern: '13s11' })[style]; },
   };
+  for (const k of Object.keys(Qs)) { const f = Qs[k]; Qs[k] = (style, d) => f(style, d) || f('jazz', d); }
 
   // ---------- transforms ----------
   // Each returns an array of { prog, device, reason, heard?, family }.
@@ -1116,6 +1178,202 @@ const Reharm = (() => {
     return res.slice(0, 2);
   };
 
+  // ---------- master level: the devices of the players (Cory Henry, Kirk Franklin, Barry Harris, Herbie, Collier, Molina) ----------
+  const tint = (c, key, s, d, i, prog) => { let q = null; try { q = STYLES[s].recolor(c, key, Math.max(d, 3), i, prog); } catch (e) {} return upgrade(c, q); };
+  const melPcs = (c) => c.melody && c.melody.length ? [...new Set(c.melody.map(m => mod(typeof m === 'number' ? m : m.note, 12)))] : [];
+  const okTension = (q, iv) => { const k = T.Q[q].cat; return (k === 'min' ? [2, 5, 9] : k === 'maj' ? [2, 6, 9] : k === 'dom' ? [1, 2, 3, 6, 8, 9] : k === 'sus' ? [2, 9] : [2]).includes(iv); };
+  const fits = (c) => { const m = melPcs(c); if (!m.length) return true; const pcs = T.chordPcs(c); return m.every(pc => pcs.includes(pc) || okTension(c.q, mod(pc - c.root, 12))); };
+  const resolvesTo = (c, nxt) => nxt && (mod(nxt.root - c.root, 12) === 5 || mod(nxt.root - c.root, 12) === 11);
+
+  // Sideslip: the same shape a half step above, sliding down into the real chord (Hancock; Cory Henry's arrivals).
+  X.sideslip = (prog, key, s, d) => {
+    const res = [];
+    prog.forEach((c, i) => {
+      if (beats(c) < 2 || cat(c) === 'dim' || c.bass != null) return;
+      const real = tint(c, key, s, d, i, prog); const up = mk(c.root + 1, real.q);
+      const out = clone(prog); out[i] = Object.assign({}, real, { beats: beats(c) / 2, changed: real.q !== c.q ? 'mod' : undefined }); out.splice(i, 0, Object.assign({}, up, { beats: beats(c) / 2, changed: 'new' }));
+      res.push({ prog: out, device: 'Sideslip', reason: `${sym(up, key)} → ${sym(real, key)}: the identical shape a half step above, sliding down onto the real chord. Planing by semitone: the ear hears a "wrong" chord resolve, which is the whole pleasure (Herbie Hancock's sideslip; Cory Henry does it on every other downbeat).`, family: 'sideslip' });
+    });
+    return res.slice(0, 2);
+  };
+  // Sideslip the whole phrase: every chord approached from a half step above.
+  X.sideslipAll = (prog, key, s, d) => {
+    if (prog.length < 2 || prog.some(c => beats(c) < 2)) return [];
+    const out = []; let n = 0;
+    prog.forEach((c, i) => {
+      const real = tint(c, key, s, d, i, prog);
+      if (cat(c) === 'dim' || c.bass != null) { out.push(Object.assign({}, c, { changed: undefined })); return; }
+      out.push(Object.assign(mk(c.root + 1, real.q), { beats: beats(c) / 2, changed: 'new' })); out.push(Object.assign({}, real, { beats: beats(c) / 2, changed: real.q !== c.q ? 'mod' : undefined })); n++;
+    });
+    if (n < 2) return [];
+    return [{ prog: out, device: 'Sideslip everything', reason: `Every chord preceded by its own shape a half step up: the phrase breathes in and out of the key twice a bar. Modern gospel and postbop at once — chromatic planing as texture, not as a trick.`, family: 'sideslipAll' }];
+  };
+
+  // Sus to 3: the dominant arrives suspended and then shows its third — a two-stage V (gospel's delayed resolution).
+  X.susResolve = (prog, key, s, d) => {
+    const res = [];
+    prog.forEach((c, i) => {
+      if (!(cat(c) === 'dom' || isV(c, key)) || beats(c) < 2 || !resolvesTo(c, next(prog, i))) return;
+      const susQ = d >= 4 ? '13sus4' : '9sus4'; const domQ = d >= 4 ? (s === 'gospel' || s === 'blues' ? '13b9' : '13') : (s === 'brazil' ? '7b9' : '9');
+      const seq = [mk(c.root, susQ), mk(c.root, domQ)];
+      res.push({ prog: replaceWith(prog, i, seq), device: 'Sus to 3', reason: `${syms(seq, key)} → ${sym(next(prog, i), key)}: the dominant arrives with its 4th suspended, then the 4th falls to the 3rd before it resolves. Two tensions for the price of one; the church pianist's way of making a plain V last.`, family: 'susResolve' });
+    });
+    return res.slice(0, 2);
+  };
+
+  // 7♯9 planing: dominant 7♯9 shapes sliding in parallel into the V (the "Hendrix chord" as a gospel/soul texture).
+  X.hendrix = (prog, key, s, d) => {
+    const res = [];
+    prog.forEach((c, i) => {
+      if (!isV(c, key) || beats(c) < 2) return;
+      const seq = beats(c) >= 4 ? [mk(c.root + 3, '7s9'), mk(c.root + 1, '7s9'), mk(c.root, '7s9')] : [mk(c.root + 1, '7s9'), mk(c.root, '7s9')];
+      const w = beats(c) >= 4 ? [1, 1, 2] : [1, 1];
+      res.push({ prog: replaceWith(prog, i, seq, w), device: 'Planing 7♯9s', reason: `${syms(seq, key)}: dominant 7♯9 shapes sliding down in parallel onto the V. Blues and gospel share this chord — major and minor third at once — and planing it turns the cadence into a shout (Hendrix, Cory Henry, every Sunday).`, family: 'hendrix' });
+    });
+    return res.slice(0, 1);
+  };
+
+  // Shout turnaround: I – III7♯9 – VI7♯9 – II13 into the ii or V (Kirk Franklin's 1–3–6–2).
+  X.shoutTurn = (prog, key, s, d) => {
+    if (key.mode !== 'major') return [];
+    const res = []; const t = key.tonic;
+    prog.forEach((c, i) => {
+      const nx = next(prog, i); if (!isTonic(c, key) || beats(c) < 4 || !(isV(nx, key) || isii(nx, key))) return;
+      const dom = s === 'jazz' ? '7b9' : '7s9';
+      const seq = [tint(c, key, s, d, i, prog), mk(t + 4, dom), mk(t + 9, dom), mk(t + 2, s === 'jazz' ? '9' : '13')];
+      res.push({ prog: replaceWith(prog, i, seq), device: 'Shout turnaround', reason: `${syms(seq, key)} → ${sym(nx, key)}: 1–3–6–2 with every step a dominant — III7♯9 pulls to vi, VI7♯9 pulls to ii, II13 pulls to V. The whole bar becomes a chain of pulls (Kirk Franklin, Cory Henry; the 1625 the church plays as 1-3-6-2).`, family: 'shoutTurn' });
+    });
+    return res.slice(0, 1);
+  };
+
+  // A 2–5 into everything: each chord gets its own related ii–V in front of it (gospel/jazz reharm as a wall of cadences).
+  X.everyTarget = (prog, key, s, d) => {
+    if (prog.length < 2) return [];
+    const out = []; let n = 0;
+    prog.forEach((c, i) => {
+      const pv = out.length ? out[out.length - 1] : null;
+      const already = pv && (mod(pv.root - c.root, 12) === 7 && cat(pv) === 'dom');
+      if (i > 0 && beats(prog[i - 1]) >= 2 && !already && cat(c) !== 'dim' && !isTonic(c, key) && !(isV(c, key))) {
+        const b = beats(prog[i - 1]) / 2; // the previous chord gives up its second half
+        out[out.length - 1] = Object.assign({}, out[out.length - 1], { beats: b });
+        const minorTarget = cat(c) === 'min'; const ii = mk(c.root + 2, minorTarget ? 'm7b5' : Qs.ii(s, d)); const V = mk(c.root + 7, minorTarget ? '7b9' : Qs.V7(s, d));
+        out.push(Object.assign(ii, { beats: b / 2, changed: 'new' }), Object.assign(V, { beats: b / 2, changed: 'new' })); n++;
+      }
+      out.push(Object.assign({}, c, { changed: undefined }));
+    });
+    if (n < 2) return [];
+    return [{ prog: out, device: 'A 2–5 into everything', reason: `Each chord gets its own ii–V in front of it, so the phrase becomes a chain of cadences into moving targets. The gospel keyboardist's reharm reflex — and the jazz one (Barry Harris: "put a two-five in front of it").`, family: 'everyTarget' }];
+  };
+
+  // Tritone approaches: every chord preceded by the tritone substitute of its dominant (♭II7♯11), bass falling by half step.
+  X.tritoneAll = (prog, key, s, d) => {
+    if (prog.length < 2) return [];
+    const out = []; let n = 0;
+    prog.forEach((c, i) => {
+      if (i > 0 && beats(prog[i - 1]) >= 2 && cat(c) !== 'dim') {
+        out[out.length - 1] = Object.assign({}, out[out.length - 1], { beats: beats(prog[i - 1]) / 2 });
+        out.push(Object.assign(mk(c.root + 1, Qs.subV(s, d)), { beats: beats(prog[i - 1]) / 2, changed: 'new' })); n++;
+      }
+      out.push(Object.assign({}, c, { changed: undefined }));
+    });
+    if (n < 2) return [];
+    return [{ prog: out, device: 'Tritone approaches', reason: `Every chord approached from a half step above by a dominant with a ♯11: the tritone sub of its V. The bass falls by semitone into every change — the smoothest chromatic bass line there is (Jobim, Barry Harris's "half-step rule").`, family: 'tritoneAll' }];
+  };
+
+  // Upper structures: a dominant recolored as a triad over its shell (II = 13♯11, VI = 13♭9, ♭VI = 7♯9♭13, ♭II = 7♭9♯11).
+  const US = [['13s11', 2, 'the II triad', 'bright, Lydian-dominant'], ['13b9', 9, 'the VI triad', 'gospel sweet-and-sour'], ['7s9b13', 8, 'the ♭VI triad', 'dark, altered'], ['7b9s11', 1, 'the ♭II triad', 'the tritone sub hiding inside the V']];
+  X.upperStructure = (prog, key, s, d) => {
+    const res = [];
+    prog.forEach((c, i) => {
+      if (cat(c) !== 'dom' && !isV(c, key)) return;
+      if (!resolvesTo(c, next(prog, i))) return;
+      for (const [q, iv, name, feel] of US) {
+        const cand = Object.assign({}, c, { q }); if (!fits(cand)) continue;
+        res.push({ prog: swap(prog, i, { q }), device: 'Upper structure', reason: `${sym(cand, key)}: ${pcn(c.root + iv, key)} major over the ${sym(Object.assign({}, c, { q: '7' }), key)} shell — ${name}, ${feel}. Upper-structure triads are how pianists voice altered dominants: a plain triad in the right hand, the tension is in the relationship (Berklee H4, Mark Levine).`, family: 'upperStructure' });
+        if (res.length >= 2) break;
+      }
+    });
+    return res.slice(0, 2);
+  };
+
+  // Sus cast (Maiden Voyage): every chord as a suspended or m11 color — no thirds leading anywhere, the harmony floats.
+  X.susCast = (prog, key, s, d) => {
+    const out = clone(prog); let n = 0;
+    out.forEach((c, i) => {
+      if (i === prog.length - 1 && isTonic(c, key) && s !== 'modern') return;
+      if (cat(c) === 'maj' || cat(c) === 'dom') { if (c.q !== '9sus4' && c.q !== '13sus4') { out[i] = Object.assign({}, c, { q: d >= 6 ? '13sus4' : '9sus4', changed: 'mod' }); n++; } }
+      else if (cat(c) === 'min') { if (c.q !== 'm11') { out[i] = Object.assign({}, c, { q: 'm11', changed: 'mod' }); n++; } }
+    });
+    if (n < 2) return [];
+    return [{ prog: out, device: 'Cast in sus', reason: `Every chord suspended: 9sus4 and m11 colors, no thirds pulling anywhere. The harmony stops functioning and starts floating — "Maiden Voyage" (Hancock), neo-soul's resting state.`, family: 'susCast' }];
+  };
+
+  // Melody reharmonized: new roots chosen so the sung note becomes the 9th, 13th, ♯11 or 7th of a richer chord.
+  X.melodyReharm = (prog, key, s, d) => {
+    if (s === 'classical' && d < 7) return [];
+    const res = [];
+    const pivot = (c) => { const m = melPcs(c); if (m.length) return mod(Math.max(...c.melody.map(x => typeof x === 'number' ? x : x.note)), 12); return mod(c.root + (cat(c) === 'min' ? 3 : 4), 12); }; // the sung note, else the chord's 3rd
+    const lush = [['maj9', 2, '9th'], ['m9', 2, '9th'], ['maj7s11', 6, '♯11'], ['13', 9, '13th'], ['9sus4', 2, '9th'], ['m11', 5, '11th'], ['maj7', 11, 'major 7th'], ['m6/9', 2, '9th']];
+    const dark = [['13', 9, '13th'], ['7s11', 6, '♯11'], ['m11', 5, '11th'], ['13b9', 9, '13th'], ['7b9', 1, '♭9'], ['m9', 2, '9th'], ['maj7s11', 6, '♯11'], ['9sus4', 2, '9th']];
+    const allowed = (q) => (s === 'pop' || s === 'film') ? ['maj9', 'm9', 'maj7', '9sus4', 'maj7s11'].includes(q) : (s === 'brazil' ? q !== '7b9' || true : true);
+    const build = (table, label) => {
+      const out = []; let prevRoot = null; let n = 0; const notes = [];
+      prog.forEach((c, i) => {
+        const lastTonic = i === prog.length - 1 && isTonic(c, key);
+        const p = pivot(c); let best = null, bc = Infinity;
+        if (!lastTonic) for (const [q, iv, what] of table) {
+          if (!allowed(q)) continue;
+          const root = mod(p - iv, 12); const cand = Object.assign(mk(root, q), { beats: beats(c), melody: c.melody });
+          if (T.sameChord(cand, c) || !fits(cand)) continue;
+          let cost = 0; const mv = prevRoot == null ? 0 : mod(root - prevRoot, 12);
+          cost += prevRoot == null ? 0 : (mv === 5 ? 0 : mv === 1 || mv === 11 ? 0.3 : mv === 7 ? 0.5 : mv === 2 || mv === 10 ? 0.6 : mv === 0 ? 1.2 : 0.8);
+          cost += root === c.root ? 0.9 : 0; // a new root is the point
+          if (T.chordPcs(cand).includes(mod(c.root + (cat(c) === 'min' ? 3 : 4), 12))) cost -= 0.3; // keeps the original's 3rd somewhere inside
+          if (cost < bc) { bc = cost; best = { cand, what }; }
+        }
+        if (best) { out.push(Object.assign({}, best.cand, { changed: 'mod' })); prevRoot = best.cand.root; n++; notes.push(`${pcn(p, key)} as the ${best.what} of ${sym(best.cand, key)}`); }
+        else { out.push(Object.assign({}, c, { changed: undefined })); prevRoot = c.root; }
+      });
+      if (n < Math.max(2, prog.length - 1)) return null;
+      return { prog: out, device: `Melody reharmonized (${label})`, reason: `New roots under the line: ${notes.slice(0, 4).join('; ')}${notes.length > 4 ? '…' : ''}. The melody never moves; the chords underneath change what it means. The arranger's core craft — every note becomes a color tone of something richer (Berklee reharm; Collier, Jesús Molina).`, family: 'melodyReharm' };
+    };
+    const a = build(lush, 'lush'); if (a) res.push(a);
+    const b = build(dark, 'dark'); if (b && (!a || sig0(b.prog) !== sig0(a.prog))) res.push(b);
+    return res;
+  };
+  const sig0 = (p) => p.map(c => `${c.root}:${c.q}`).join('|');
+
+  // Half-step lift: the second half of the phrase moves up a semitone, pivoting through the tritone sub of its new first chord.
+  X.keyLift = (prog, key, s, d) => {
+    if (prog.length < 2) return [];
+    const cut = Math.ceil(prog.length / 2); if (beats(prog[cut - 1]) < 2) return [];
+    const out = [];
+    prog.forEach((c, i) => {
+      if (i < cut) out.push(Object.assign({}, c, { changed: undefined })); else out.push(Object.assign({}, c, { root: mod(c.root + 1, 12), bass: c.bass == null ? null : mod(c.bass + 1, 12), changed: 'mod', melodyShift: 1 }));
+    });
+    const target = out[cut]; out[cut - 1] = Object.assign({}, out[cut - 1], { beats: beats(prog[cut - 1]) / 2 });
+    out.splice(cut, 0, Object.assign(mk(target.root + 1, Qs.subV(s, d)), { beats: beats(prog[cut - 1]) / 2, changed: 'new', pivot: true }));
+    const newKey = { tonic: mod(key.tonic + 1, 12), mode: key.mode };
+    return [{ prog: out, device: 'Half-step lift', reason: `From ${sym(target, key)} on, everything is a semitone higher — the second half of the phrase lives in ${T.keyName ? T.keyName(newKey) : pcn(newKey.tonic, newKey)}, reached through ${sym(out[cut], key)}, the tritone sub of its new dominant. The gospel and Collier modulation: the floor rises under the singer and the room lifts with it.`, family: 'keyLift' }];
+  };
+
+  // Modulation by a third: the second half in a chromatic-mediant key (up a major third or down a minor third), pivoting through a ii–V.
+  X.pivotModulation = (prog, key, s, d) => {
+    if (prog.length < 2) return [];
+    const cut = Math.ceil(prog.length / 2); if (beats(prog[cut - 1]) < 2) return [];
+    const res = [];
+    for (const [shift, name] of [[4, 'up a major third'], [9, 'down a minor third']]) {
+      const out = [];
+      prog.forEach((c, i) => { if (i < cut) out.push(Object.assign({}, c, { changed: undefined })); else out.push(Object.assign({}, c, { root: mod(c.root + shift, 12), bass: c.bass == null ? null : mod(c.bass + shift, 12), changed: 'mod', melodyShift: shift })); });
+      const target = out[cut]; const b = beats(prog[cut - 1]) / 2; out[cut - 1] = Object.assign({}, out[cut - 1], { beats: b });
+      const minorT = cat(target) === 'min';
+      out.splice(cut, 0, Object.assign(mk(target.root + 2, minorT ? 'm7b5' : Qs.ii(s, d)), { beats: b / 2, changed: 'new', pivot: true }), Object.assign(mk(target.root + 7, minorT ? '7b9' : Qs.V7(s, d)), { beats: b / 2, changed: 'new', pivot: true }));
+      const newKey = { tonic: mod(key.tonic + shift, 12), mode: key.mode };
+      res.push({ prog: out, device: 'Modulation by a third', reason: `The second half ${name}, into ${T.keyName ? T.keyName(newKey) : pcn(newKey.tonic, newKey)}, reached through its own ii–V. Chromatic-mediant modulation: the keys share a note and nothing else, so the light changes color at once (Schubert, Rachmaninoff; Jesús Molina's bridges).`, family: 'pivotModulation' });
+    }
+    return res;
+  };
+
   // ---------- Shadow (negative harmony) ----------
   function shadow(prog, key) {
     const out = prog.map(c => { const n = T.negative(c, key); return Object.assign({}, c, n || {}, { changed: 'mod' }); });
@@ -1154,13 +1412,19 @@ const Reharm = (() => {
     const total = prog.reduce((a, c) => a + beats(c), 0);
     const srcSpans = []; { let b = 0; for (const c of prog) { srcSpans.push({ s: b, e: b + beats(c), m: c.melody && c.melody.length ? c.melody.map(m => typeof m === 'number' ? m : m.note) : [] }); b += beats(c); } }
     const hasMel = srcSpans.some(x => x.m.length);
-    const attachMelody = (p) => { if (!hasMel) return; const tot = p.reduce((a, c) => a + beats(c), 0); const k = total / (tot || 1); let b = 0; for (const c of p) { const s0 = b * k, e0 = (b + beats(c)) * k; b += beats(c); const m = []; for (const x of srcSpans) { const ov = Math.min(e0, x.e) - Math.max(s0, x.s); if (ov > 0.01 * total) m.push(...x.m); } if (m.length) c.melody = [...new Set(m)]; } };
+    const attachMelody = (p) => { if (!hasMel) return; const tot = p.reduce((a, c) => a + beats(c), 0); const k = total / (tot || 1); let b = 0; for (const c of p) { const s0 = b * k, e0 = (b + beats(c)) * k; b += beats(c); const m = []; for (const x of srcSpans) { const ov = Math.min(e0, x.e) - Math.max(s0, x.s); if (ov > 0.01 * total) m.push(...x.m); } if (m.length) c.melody = [...new Set(m)].map(n => n + (c.melodyShift || 0)); } };
     all.forEach(o => {
       attachMelody(o.prog);
       o.mood = M.progressionMood(o.prog, key, style);
       o.roman = o.prog.map(c => c.roman || T.romanNumeral(c, key));
-      o.clashes = o.prog.filter(c => c.changed && !fitsMelody(c)).map(c => sym(c, key));
+      o.clashes = o.prog.filter(c => c.changed && !c.pivot && !fitsMelody(c)).map(c => sym(c, key));
+      // impact: how much of the phrase is new (changed roots count double; recolors count half)
+      { const srcRoots = new Set(prog.map(x => x.root)); const newRoots = new Set(); o.impact = o.prog.reduce((a, c) => { if (!c.changed) return a; if (!srcRoots.has(c.root)) { newRoots.add(c.root); return a + 1.6; } return a + (prog.some(x => x.root === c.root && cat(x) === cat(c)) ? 0.5 : 0.9); }, 0) + 0.4 * newRoots.size; }
       let score = o.weight * (1 + 0.35 * (o.depth / depth)); // deeper (within the ask) ranks a little higher
+      // the deeper the ask, the more a substantial rewrite is worth and the less a touch-up is
+      const want = depth <= 2 ? 0 : depth <= 4 ? 0.35 : depth <= 6 ? 0.7 : 1.0;
+      score += want * Math.min(o.impact, 8) * 0.45;
+      if (depth >= 4 && o.impact <= 0.5) score -= 1.2 * (depth - 3);
       if (opts.mood) score += 1.6 * (M.gemsById(String(opts.mood).split(':')[0]) ? M.gemsMatch(o.mood.focus || o.mood, opts.mood, o.family) : M.moodMatch(o.mood.focus || o.mood, opts.mood));
       o.gems = M.gemsOf(o.mood.focus || o.mood, o.family);
       if (o.clashes.length) score -= 2.5 * o.clashes.length;
@@ -1168,19 +1432,24 @@ const Reharm = (() => {
     });
     if (opts.melodyLock) all = all.filter(o => !o.clashes.length);
     all.sort((a, b) => b.score - a.score);
-    // diversity: at most two per family
+    // near-duplicates: from depth 3 up, two options with the same roots and chord categories (differing only in color
+    // or inversion) are one idea — keep the better scored
+    if (depth >= 3) { const skel = (p) => p.map(c => `${c.root}:${cat(c)}`).join('|'); const seenSk = new Set(); all = all.filter(o => { const k = skel(o.prog); if (seenSk.has(k)) return false; seenSk.add(k); return true; }); }
+    // diversity: at most two per family (one from depth 5 up, so the list spans more devices)
+    const perFamily = depth >= 5 ? 1 : 2;
     const count = {}; const picked = [];
-    for (const o of all) { count[o.family] = (count[o.family] || 0) + 1; if (count[o.family] > 2) continue; picked.push(o); if (picked.length >= limit) break; }
+    for (const o of all) { count[o.family] = (count[o.family] || 0) + 1; if (count[o.family] > (o.family === 'melodyReharm' || o.family === 'pivotModulation' ? 2 : perFamily)) continue; picked.push(o); if (picked.length >= limit) break; }
     // whole-phrase rewrites: chain two or three compatible moves, then recolor in the style, so the writer can
     // hear the whole lens at once and not only one chord at a time
     if (opts.compose !== false && depth >= 2 && all.length >= 2) {
-      const skip = new Set(['recolor', 'slashBass', 'pedal', 'sus', 'sequenceFifths', 'coltrane', 'canon', 'modalCast', 'dominantPedal', 'bluesSevenths']);
+      const skip = new Set(['recolor', 'slashBass', 'pedal', 'sus', 'sequenceFifths', 'coltrane', 'canon', 'modalCast', 'dominantPedal', 'bluesSevenths', 'keyLift', 'pivotModulation', 'melodyReharm', 'susCast', 'sideslipAll', 'everyTarget', 'tritoneAll']);
+      const steps = depth >= 7 ? 4 : depth >= 5 ? 3 : 2;
       const build = (firstFamily) => {
         let base = prog.map(c => Object.assign({}, c, { changed: undefined })); const chain = []; const used = new Set();
         let kept = []; // chords earlier steps introduced; a later step may not undo them
-        for (let step = 0; step < 3; step++) {
-          const subs = ideas(base, key, Object.assign({}, opts, { compose: false, limit: 14, mood: null }));
-          const pick = subs.find(o => !skip.has(o.family) && !used.has(o.family) && (step > 0 || !firstFamily || o.family === firstFamily) && o.prog.length <= 10 && kept.every(k => o.prog.some(c => T.sameChord(c, k))));
+        for (let step = 0; step < steps; step++) {
+          const subs = ideas(base, key, Object.assign({}, opts, { compose: false, limit: 16, mood: null }));
+          const pick = subs.find(o => !skip.has(o.family) && !used.has(o.family) && (step > 0 || !firstFamily || o.family === firstFamily) && o.prog.length <= 12 && kept.every(k => o.prog.some(c => T.sameChord(c, k))));
           if (!pick) break;
           used.add(pick.family); chain.push(pick);
           kept = kept.concat(pick.prog.filter(c => c.changed));
@@ -1197,13 +1466,17 @@ const Reharm = (() => {
       };
       const seen2 = new Set(picked.map(o => sig(o.prog)));
       const c1 = build(null); if (c1 && !seen2.has(sig(c1.prog))) { picked.push(c1); seen2.add(sig(c1.prog)); }
-      const c2 = build(picked[1] && !skip.has(picked[1].family) ? picked[1].family : null); if (c2 && !seen2.has(sig(c2.prog))) picked.push(c2);
+      const c2 = build(picked[1] && !skip.has(picked[1].family) ? picked[1].family : null); if (c2 && !seen2.has(sig(c2.prog))) { picked.push(c2); seen2.add(sig(c2.prog)); }
+      if (depth >= 6) { const c3 = build(picked[2] && !skip.has(picked[2].family) ? picked[2].family : null); if (c3 && !seen2.has(sig(c3.prog))) picked.push(c3); }
+      // from depth 6 up the whole-phrase rewrites lead the list
+      if (depth >= 6) picked.sort((a, b) => (b.impact || (b.family === 'compose' ? 6 : 0)) - (a.impact || (a.family === 'compose' ? 6 : 0)));
     }
+    picked.forEach(o => { if (o.impact == null) o.impact = o.prog.filter(c => c.changed).length; });
     return picked;
   }
 
   function describe(prog, key) { return prog.map(c => c.roman || T.romanNumeral(c, key)).join(' – '); }
 
-  return { STYLES, STYLE_ORDER, ideas, shadow, describe, X, helpers: { clone, mk, inv, replaceWith, approach, passing, swap, upgrade } };
+  return { STYLES, STYLE_ORDER, DEPTHS, ideas, shadow, describe, X, helpers: { clone, mk, inv, replaceWith, approach, passing, swap, upgrade } };
 })();
 if (typeof module !== 'undefined') module.exports = Reharm;

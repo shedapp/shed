@@ -91,6 +91,18 @@ const Export = (() => {
 
   // ---------- practice lines, one per device family ----------
   const TEACH = {
+    sideslip: 'Take any chord and play its exact shape a half step up, then slide down into it; do it on the "and" of 4 into every downbeat of a tune you know.',
+    sideslipAll: 'Comp a whole chorus where every chord is approached from a half step above with the same shape; keep the melody on top so the slips read as color, not mistakes.',
+    susResolve: 'On every dominant, play 9sus4 for two beats and the plain 9 or 13 for two; then shrink it to one beat each. The 4th falls to the 3rd — hear it as a tiny melody.',
+    hendrix: 'Play 7♯9 shapes down by half steps into the V of a blues (♭VII–♭VI–V); keep the root in the left hand and the ♯9 on top.',
+    shoutTurn: 'Play 1–3–6–2–5 with every step a dominant 7♯9 or 13, in four keys; then try it in the last two bars of a hymn you know.',
+    everyTarget: 'Take a four-chord loop and put a ii–V in front of each chord; then take half of them out again and keep only the ones that lift.',
+    tritoneAll: 'Precede each chord with the dominant a half step above it (♭II7♯11); play the bass line alone first — it should fall by semitone into every change.',
+    upperStructure: 'Left hand: 3rd and 7th of the dominant. Right hand: a plain major triad on the 2nd, 6th, ♭6th or ♭2nd. Four triads, four colors; sing the melody note over each.',
+    susCast: 'Play a song you know with every chord as a 9sus4 or m11 — no thirds anywhere. Notice how the pull disappears and the harmony becomes a place.',
+    melodyReharm: 'Take one melody note and harmonize it eight ways: as root, 3rd, 5th, 7th, 9th, 11th, 13th and ♯11 of something. Then string four of those under the real tune.',
+    keyLift: 'Play the last phrase of a song a half step up, approaching it with the tritone sub of its new V; practice the pivot bar until the lift feels inevitable, not sudden.',
+    pivotModulation: 'Modulate up a major third and back through a ii–V each way; then down a minor third. Write the common tone between the two keys and keep it on top.',
     recolor: 'Play the same four chords with the new colors in three other keys today; keep the melody note on top each time.',
     sus: 'Practice V sus to V in every key around the circle of fifths; feel the 4th fall to the 3rd in the right hand only.',
     slashBass: 'Play the bass line alone first, then add the chords above it; the line should sing without the harmony.',
