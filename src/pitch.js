@@ -37,7 +37,7 @@ class Down16 {
 
 class PitchEngine {
   constructor(sr, opts = {}) {
-    this.sr = sr; this.P = Object.assign({ hop: 256, gate: 1.7, strong: 3, pct: 0.1, cohMargin: 1.3, onThr: 0.5, offThr: 0.38, songOnThr: 0.55, songMatchCents: 50, xcorrMax: 0.35, songWin: 4 }, opts);
+    this.sr = sr; this.P = Object.assign({ hop: 256, gate: 1.7, strong: 3, pct: 0.1, cohMargin: 1.3, onThr: 0.6, offThr: 0.45, songOnThr: 0.65, songMatchCents: 50, xcorrMax: 0.35, songWin: 4, onsetFrames: 3, onsetCents: 100, headphones: false }, opts);
     this.dm = new Down16(sr); this.ds = new Down16(sr);
     this.N = 8192; this.ring = new Float32Array(this.N); this.sring = new Float32Array(this.N); this.w = 0; this.fill = 0; this.sinceHop = 0;
     this.frame = new Float32Array(PE_WIN); this.sframe = new Float32Array(PE_WIN);
@@ -45,7 +45,7 @@ class PitchEngine {
     this.room = null; this.voiced = false; this.prev = null; this.med = []; this.onset = 0; this.stats = { frames: 0, gated: 0, songMatch: 0, nn: 0 };
     this.fallback = null;   // SingTracker when the network is unavailable
     this.model = null;      // async (Float32Array frames, n) → Float32Array probabilities [n*360]
-    this.songH = new Float32Array(this.P.songWin); this.si = 0; this.xf = makeFFT(2048); this.xa = new Float32Array(2048); this.xb = new Float32Array(2048); this.xc = new Float32Array(2048); this.xd = new Float32Array(2048);
+    this.songH = new Float32Array(this.P.songWin); this.si = 0; this.XN = 4096; this.xf = makeFFT(this.XN); this.xa = new Float32Array(this.XN); this.xb = new Float32Array(this.XN); this.xc = new Float32Array(this.XN); this.xd = new Float32Array(this.XN); this.lagEst = 0;
     this.pendingBlocks = []; this.busy = false;
   }
   // ---- leak estimate: percentile of mic/song level, capped by coherence ----
@@ -71,16 +71,19 @@ class PitchEngine {
     }
     if (c.n > 10 && Y > 0) this.kc = Math.sqrt(B / Y);
   }
-  // ---- how much of a mic frame is simply the song: squared normalised cross-correlation peak within ±30 ms ----
+  // ---- how much of a mic frame is simply the song: squared normalised cross-correlation peak. The speaker → mic path
+  // (plus output-latency error) is unknown, so the search covers ±150 ms, and the lag that keeps winning is remembered. ----
   songShare(x, s) {
-    const N = 2048, a = this.xa, b = this.xb, c = this.xc, d = this.xd; let ex = 0, es = 0;
+    const N = this.XN, a = this.xa, b = this.xb, c = this.xc, d = this.xd; let ex = 0, es = 0;
     for (let i = 0; i < N; i++) { const v = i < PE_WIN ? x[i] : 0, u = i < PE_WIN ? s[i] : 0; a[i] = v; b[i] = 0; c[i] = u; d[i] = 0; ex += v * v; es += u * u; }
     if (ex < 1e-12 || es < 1e-12) return 0;
     this.xf(a, b, false); this.xf(c, d, false);
     for (let i = 0; i < N; i++) { const re = a[i] * c[i] + b[i] * d[i], im = b[i] * c[i] - a[i] * d[i]; a[i] = re; b[i] = im; }   // X · conj(S)
     this.xf(a, b, true);
-    const L = Math.round(0.03 * PE_SR); let best = 0; for (let l = -L; l <= L; l++) { const v = a[(l + N) % N] / N; if (v > best) best = v; }
-    return best * best / (ex * es);
+    const L = Math.round(0.15 * PE_SR); let best = 0, bl = 0; for (let l = -L; l <= L; l++) { const v = a[(l + N) % N] / N; if (v > best) { best = v; bl = l; } }
+    const share = best * best / (ex * es);
+    if (share > 0.5) this.lagEst = 0.9 * this.lagEst + 0.1 * bl;   // learn the path delay from frames that are clearly just the song
+    return share;
   }
   // ---- CREPE decode: weighted average of cents around the best bin ----
   static decode(p, off) {
@@ -111,7 +114,7 @@ class PitchEngine {
     const need = [], needSong = [];
     for (let f = 0; f < nf; f++) {
       const q = info[f]; this.songH[this.si] = q.srms; this.si = (this.si + 1) % this.songH.length; let songMax = 0; for (const v of this.songH) if (v > songMax) songMax = v;
-      q.songMax = songMax; const songOn = songMax > 2e-4;
+      q.songMax = songMax; const songOn = !this.P.headphones && songMax > 2e-4;
       if (!songOn) this.room = this.room == null ? 1e-3 : q.rms < this.room ? 0.6 * this.room + 0.4 * q.rms : Math.min(4e-3, this.room * 1.0008);
       else { this.hist[this.ih] = q.rms / songMax; this.ih = (this.ih + 1) % this.hist.length; if (this.nh < this.hist.length) this.nh++; }
       const gate = Math.max(6e-4, (this.room || 0) * 2.5);
@@ -155,22 +158,22 @@ class PitchEngine {
     const thr = this.voiced ? this.P.offThr : (r.songOn ? this.P.songOnThr : this.P.onThr); const minConf = r.nsdf ? (this.voiced ? 0.6 : 0.8) : thr;
     let m = r.midi != null && r.conf >= minConf ? r.midi : null;
     if (m == null) { this.voiced = false; this.onset = 0; this.prev = null; this.pend = null; this.med.length = 0; return null; }
-    if (!this.voiced) { this.onset++; if (this.onset < 2) { this.prev = m; return null; } this.voiced = true; }
+    if (!this.voiced) { if (this.prev != null && Math.abs(m - this.prev) * 100 > this.P.onsetCents) this.onset = 0; this.onset++; if (this.onset < this.P.onsetFrames) { this.prev = m; return null; } this.voiced = true; }
     if (this.prev != null) { const d = m - this.prev; if (Math.abs(Math.abs(d) - 12) < 0.8 || Math.abs(Math.abs(d) - 19) < 0.8) { if (this.pend && Math.abs(this.pend.m - m) < 0.8) this.pend.n++; else this.pend = { m, n: 1 }; if (this.pend.n < 3) m = this.prev; else this.pend = null; } else this.pend = null; }
     this.prev = m; this.med.push(m); if (this.med.length > 3) this.med.shift();
     const s = this.med.slice().sort((p, q) => p - q); return s[s.length >> 1];
   }
 }
 // Offline clean-up of CREPE frames for the record's melody: voicing by confidence + level, 5-frame median, islands < 60 ms dropped.
-function cleanMelody(raw, hopSec) {
+function cleanMelody(raw, hopSec, thr = 0.5) {
   if (!raw.length) return [];
   let g = 0; for (const p of raw) g += p.rms * p.rms; g = Math.sqrt(g / raw.length);
-  const v = raw.map(p => p.conf >= 0.5 && p.rms > 0.05 * g);
-  // hysteresis: keep a frame with conf ≥ 0.4 if a neighbour is voiced
-  for (let pass = 0; pass < 2; pass++) for (let i = 0; i < raw.length; i++) if (!v[i] && raw[i].conf >= 0.4 && raw[i].rms > 0.05 * g && ((i > 0 && v[i - 1]) || (i + 1 < raw.length && v[i + 1]))) v[i] = true;
+  const v = raw.map(p => p.conf >= thr && p.rms > 0.05 * g);
+  // hysteresis: keep a slightly less confident frame if a neighbour is voiced
+  for (let pass = 0; pass < 2; pass++) for (let i = 0; i < raw.length; i++) if (!v[i] && raw[i].conf >= thr - 0.1 && raw[i].rms > 0.05 * g && ((i > 0 && v[i - 1]) || (i + 1 < raw.length && v[i + 1]))) v[i] = true;
   const sm = new Float32Array(raw.length);
   for (let i = 0; i < raw.length; i++) { if (!v[i]) continue; const w = []; for (let d = -2; d <= 2; d++) { const j = i + d; if (j >= 0 && j < raw.length && v[j]) w.push(raw[j].midi); } w.sort((a, b) => a - b); sm[i] = w[w.length >> 1]; }
-  const minFr = Math.ceil(0.06 / hopSec); const out = []; let start = -1;
+  const minFr = Math.ceil(0.08 / hopSec); const out = []; let start = -1;
   for (let i = 0; i <= raw.length; i++) { const on = i < raw.length && v[i]; if (on && start < 0) start = i; if (!on && start >= 0) { if (i - start >= minFr) for (let j = start; j < i; j++) out.push({ t: raw[j].t, midi: sm[j], conf: raw[j].conf }); start = -1; } }
   return out;
 }
@@ -181,7 +184,7 @@ if (typeof module !== 'undefined') { module.exports.PitchEngine = PitchEngine; m
 // {type:'push', mic, song|null, t}      → {type:'frames', t, frames:[{midi, conf, rms, src, bleed}]}
 // {type:'melody', x, sr, hop}           → {type:'melody', points:[{t, midi, conf}]}   (offline, for the record's lead vocal)
 if (typeof self !== 'undefined' && typeof document === 'undefined' && typeof WorkerGlobalScope !== 'undefined') {
-  let eng = null, session = null, ORT = null;
+  let eng = null, session = null, ORT = null, fullSession = null, fullUrl = null, fullTried = false;
   async function loadOrt(ortBase) {
     if (ORT) return ORT;
     try { ORT = await import(ortBase + 'ort.min.mjs'); }                                   // module worker (preferred)
@@ -201,11 +204,12 @@ if (typeof self !== 'undefined' && typeof document === 'undefined' && typeof Wor
   self.onmessage = async (e) => {
     const d = e.data;
     if (d.type === 'init') {
-      eng = new PitchEngine(d.sr, d.opts || {});
+      eng = new PitchEngine(d.sr, d.opts || {}); fullUrl = d.fullUrl || null;
       try { eng.model = await loadModel(d.ortBase, d.modelUrl, d.prefer); self.postMessage({ type: 'ready', nn: true, ep: session._ep }); }
       catch (err) { eng.model = null; self.postMessage({ type: 'ready', nn: false, error: String(err && err.message || err) }); }
       return;
     }
+    if (d.type === 'mode' && eng) { eng.P.headphones = !!d.headphones; return; }
     if (d.type === 'push' && eng) {
       const frames = [];
       await eng.push(d.mic, d.song, (midi, r, src) => frames.push({ midi, conf: r.conf, rms: r.rms, src, bleed: !!r.bleed }));
@@ -214,23 +218,35 @@ if (typeof self !== 'undefined' && typeof document === 'undefined' && typeof Wor
     }
     if (d.type === 'melody') {
       // offline: CREPE on the whole signal at the given hop (seconds), batched; falls back to trackMelody
-      const { x, sr, hop } = d; let pts = null;
-      if (session) {
+      const { x, sr, hop } = d; let pts = null, which = null;
+      // the song's melody deserves the big model (CREPE full, 88 MB): ~30× the compute of tiny, loaded once, GPU when available
+      if (session && fullUrl && !fullSession && !fullTried) {
+        fullTried = true;
+        try { self.postMessage({ type: 'melody', id: d.id, progress: 0, note: 'loading' }); const bytes = new Uint8Array(await (await fetch(fullUrl)).arrayBuffer());
+          const eps = typeof navigator !== 'undefined' && navigator.gpu && session._ep === 'webgpu' ? [['webgpu'], ['wasm']] : [['wasm']];
+          for (const ep of eps) { try { fullSession = await ORT.InferenceSession.create(bytes, { executionProviders: ep, graphOptimizationLevel: 'all' }); fullSession._ep = ep[0]; break; } catch (e) { fullSession = null; } }
+          if (fullSession) { const warm = await fullSession.run({ x: new ORT.Tensor('float32', new Float32Array(PE_WIN), [1, PE_WIN]) }); if (!warm.p || warm.p.data.length !== PE_BINS) fullSession = null; }
+        } catch (e) { fullSession = null; }
+      }
+      const sess = fullSession || session;
+      if (sess) {
         try {
           const dn = new Down16(sr); const y = dn.process(x); const H = Math.max(80, Math.round((hop || 0.01) * PE_SR)); const nFr = Math.max(0, Math.floor((y.length - PE_WIN) / H) + 1);
-          const probs = new Float32Array(nFr * PE_BINS); const BATCH = 64; let done = 0;
+          const probs = new Float32Array(nFr * PE_BINS); const BATCH = sess === fullSession ? (sess._ep === 'webgpu' ? 32 : 8) : 64; let done = 0; const t0 = Date.now();
           for (let f0 = 0; f0 < nFr; f0 += BATCH) {
             const n = Math.min(BATCH, nFr - f0); const B = new Float32Array(n * PE_WIN);
             for (let f = 0; f < n; f++) B.set(y.subarray((f0 + f) * H, (f0 + f) * H + PE_WIN), f * PE_WIN);
-            const r = await session.run({ x: new ORT.Tensor('float32', B, [n, PE_WIN]) }); probs.set(r.p.data, f0 * PE_BINS); done += n;
-            self.postMessage({ type: 'melody', id: d.id, progress: done / nFr });
+            const r = await sess.run({ x: new ORT.Tensor('float32', B, [n, PE_WIN]) }); probs.set(r.p.data, f0 * PE_BINS); done += n;
+            if ((f0 / BATCH) % 4 === 0) self.postMessage({ type: 'melody', id: d.id, progress: done / nFr });
+            // the big model on a CPU is too slow for long songs: fall back to tiny if this would take over 3 minutes
+            if (sess === fullSession && sess._ep !== 'webgpu' && done >= 64 && (Date.now() - t0) / done * nFr > 180000) throw new Error('too slow');
           }
           const raw = []; for (let f = 0; f < nFr; f++) { const r = PitchEngine.decode(probs, f * PE_BINS); let e = 0; for (let i = 0; i < PE_WIN; i += 4) { const v = y[f * H + i]; e += v * v; } raw.push({ t: (f * H + PE_WIN / 2) / PE_SR, midi: r.midi, conf: r.conf, rms: Math.sqrt(e / (PE_WIN / 4)) }); }
-          pts = cleanMelody(raw, H / PE_SR);
-        } catch (err) { pts = null; }
+          pts = cleanMelody(raw, H / PE_SR, sess === fullSession ? 0.6 : 0.5); which = sess === fullSession ? 'full' : 'tiny';
+        } catch (err) { pts = null; if (sess === fullSession && session) { fullSession = null; return self.onmessage(e); } }
       }
-      if (!pts) pts = trackMelody(x, sr).map(p => ({ t: p.t, midi: p.midi, conf: 1 }));
-      self.postMessage({ type: 'melody', id: d.id, points: pts, nn: !!session });
+      if (!pts) { pts = trackMelody(x, sr).map(p => ({ t: p.t, midi: p.midi, conf: 1 })); which = 'nsdf'; }
+      self.postMessage({ type: 'melody', id: d.id, points: pts, nn: !!sess, model: which });
     }
   };
 }

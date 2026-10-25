@@ -192,8 +192,8 @@ kbd{font-family:var(--mono);background:var(--panel2);border:1px solid var(--line
       </div>
       <div class="ctl vocal x-more">
         <h3>Lead vocal <b id="voclbl">full</b></h3>
-        <div class="row" id="sepRow"><button id="sepBtn" disabled>Separate vocals with AI</button><button id="sepFast" disabled title="25% overlap, single pass: about 3× faster, a few more artifacts" style="flex:0 0 auto">Fast</button></div>
-        <div class="row" id="vocalModes" hidden><button data-v="0" class="on">Full</button><button data-v="1">Lead −12 dB</button><button data-v="2">Lead off</button><button data-v="4">Band only</button><button data-v="3">Lead only</button></div>
+        <div class="row" id="sepRow"><button id="sepBtn" disabled title="Two models, 50% overlap, denoise pass: the cleanest result">Separate vocals · best</button><button id="sepFast" disabled title="One model, single pass: about 4× faster, a few more artifacts" style="flex:0 0 auto">Fast</button></div>
+        <div class="row" id="vocalModes" hidden><button data-v="0" class="on">Full mix</button><button data-v="4" title="The band alone: every voice removed">Vocals off</button><button data-v="2" title="Lead singer removed, backing vocals kept">Lead off</button><button data-v="1" title="Lead singer 12 dB quieter, as a guide">Lead −12 dB</button><button data-v="3" title="The singer alone">Lead only</button></div>
         <div class="hint" id="stemHint">Studio-grade AI separation (the models behind Ultimate Vocal Remover), run on this computer; nothing is uploaded. "Lead off" keeps the backing vocals. Laptop or desktop with Chrome, Edge or Safari 26.</div>
       </div>
       <div class="ctl loop x-more">
@@ -256,6 +256,7 @@ kbd{font-family:var(--mono);background:var(--panel2);border:1px solid var(--line
         <div class="note" id="note">—</div><div class="hz" id="hz"></div>
         <span class="spacer"></span>
         <span class="hint" id="pitchEngine"></span>
+        <button id="outMode" title="Tell Shed how you listen. With headphones the mic hears only you; with speakers Shed filters the song out of the mic.">🎧 Headphones</button>
         <div class="zoom"><button id="zOut" title="Show more notes">−</button><span id="zLbl">12 notes</span><button id="zIn" title="Bigger keys">+</button></div>
       </div>
       <canvas class="trace" id="trace" height="320"></canvas>
@@ -794,7 +795,7 @@ class Down16 {
 
 class PitchEngine {
   constructor(sr, opts = {}) {
-    this.sr = sr; this.P = Object.assign({ hop: 256, gate: 1.7, strong: 3, pct: 0.1, cohMargin: 1.3, onThr: 0.5, offThr: 0.38, songOnThr: 0.55, songMatchCents: 50, xcorrMax: 0.35, songWin: 4 }, opts);
+    this.sr = sr; this.P = Object.assign({ hop: 256, gate: 1.7, strong: 3, pct: 0.1, cohMargin: 1.3, onThr: 0.6, offThr: 0.45, songOnThr: 0.65, songMatchCents: 50, xcorrMax: 0.35, songWin: 4, onsetFrames: 3, onsetCents: 100, headphones: false }, opts);
     this.dm = new Down16(sr); this.ds = new Down16(sr);
     this.N = 8192; this.ring = new Float32Array(this.N); this.sring = new Float32Array(this.N); this.w = 0; this.fill = 0; this.sinceHop = 0;
     this.frame = new Float32Array(PE_WIN); this.sframe = new Float32Array(PE_WIN);
@@ -802,7 +803,7 @@ class PitchEngine {
     this.room = null; this.voiced = false; this.prev = null; this.med = []; this.onset = 0; this.stats = { frames: 0, gated: 0, songMatch: 0, nn: 0 };
     this.fallback = null;   // SingTracker when the network is unavailable
     this.model = null;      // async (Float32Array frames, n) → Float32Array probabilities [n*360]
-    this.songH = new Float32Array(this.P.songWin); this.si = 0; this.xf = makeFFT(2048); this.xa = new Float32Array(2048); this.xb = new Float32Array(2048); this.xc = new Float32Array(2048); this.xd = new Float32Array(2048);
+    this.songH = new Float32Array(this.P.songWin); this.si = 0; this.XN = 4096; this.xf = makeFFT(this.XN); this.xa = new Float32Array(this.XN); this.xb = new Float32Array(this.XN); this.xc = new Float32Array(this.XN); this.xd = new Float32Array(this.XN); this.lagEst = 0;
     this.pendingBlocks = []; this.busy = false;
   }
   // ---- leak estimate: percentile of mic/song level, capped by coherence ----
@@ -828,16 +829,19 @@ class PitchEngine {
     }
     if (c.n > 10 && Y > 0) this.kc = Math.sqrt(B / Y);
   }
-  // ---- how much of a mic frame is simply the song: squared normalised cross-correlation peak within ±30 ms ----
+  // ---- how much of a mic frame is simply the song: squared normalised cross-correlation peak. The speaker → mic path
+  // (plus output-latency error) is unknown, so the search covers ±150 ms, and the lag that keeps winning is remembered. ----
   songShare(x, s) {
-    const N = 2048, a = this.xa, b = this.xb, c = this.xc, d = this.xd; let ex = 0, es = 0;
+    const N = this.XN, a = this.xa, b = this.xb, c = this.xc, d = this.xd; let ex = 0, es = 0;
     for (let i = 0; i < N; i++) { const v = i < PE_WIN ? x[i] : 0, u = i < PE_WIN ? s[i] : 0; a[i] = v; b[i] = 0; c[i] = u; d[i] = 0; ex += v * v; es += u * u; }
     if (ex < 1e-12 || es < 1e-12) return 0;
     this.xf(a, b, false); this.xf(c, d, false);
     for (let i = 0; i < N; i++) { const re = a[i] * c[i] + b[i] * d[i], im = b[i] * c[i] - a[i] * d[i]; a[i] = re; b[i] = im; }   // X · conj(S)
     this.xf(a, b, true);
-    const L = Math.round(0.03 * PE_SR); let best = 0; for (let l = -L; l <= L; l++) { const v = a[(l + N) % N] / N; if (v > best) best = v; }
-    return best * best / (ex * es);
+    const L = Math.round(0.15 * PE_SR); let best = 0, bl = 0; for (let l = -L; l <= L; l++) { const v = a[(l + N) % N] / N; if (v > best) { best = v; bl = l; } }
+    const share = best * best / (ex * es);
+    if (share > 0.5) this.lagEst = 0.9 * this.lagEst + 0.1 * bl;   // learn the path delay from frames that are clearly just the song
+    return share;
   }
   // ---- CREPE decode: weighted average of cents around the best bin ----
   static decode(p, off) {
@@ -868,7 +872,7 @@ class PitchEngine {
     const need = [], needSong = [];
     for (let f = 0; f < nf; f++) {
       const q = info[f]; this.songH[this.si] = q.srms; this.si = (this.si + 1) % this.songH.length; let songMax = 0; for (const v of this.songH) if (v > songMax) songMax = v;
-      q.songMax = songMax; const songOn = songMax > 2e-4;
+      q.songMax = songMax; const songOn = !this.P.headphones && songMax > 2e-4;
       if (!songOn) this.room = this.room == null ? 1e-3 : q.rms < this.room ? 0.6 * this.room + 0.4 * q.rms : Math.min(4e-3, this.room * 1.0008);
       else { this.hist[this.ih] = q.rms / songMax; this.ih = (this.ih + 1) % this.hist.length; if (this.nh < this.hist.length) this.nh++; }
       const gate = Math.max(6e-4, (this.room || 0) * 2.5);
@@ -912,22 +916,22 @@ class PitchEngine {
     const thr = this.voiced ? this.P.offThr : (r.songOn ? this.P.songOnThr : this.P.onThr); const minConf = r.nsdf ? (this.voiced ? 0.6 : 0.8) : thr;
     let m = r.midi != null && r.conf >= minConf ? r.midi : null;
     if (m == null) { this.voiced = false; this.onset = 0; this.prev = null; this.pend = null; this.med.length = 0; return null; }
-    if (!this.voiced) { this.onset++; if (this.onset < 2) { this.prev = m; return null; } this.voiced = true; }
+    if (!this.voiced) { if (this.prev != null && Math.abs(m - this.prev) * 100 > this.P.onsetCents) this.onset = 0; this.onset++; if (this.onset < this.P.onsetFrames) { this.prev = m; return null; } this.voiced = true; }
     if (this.prev != null) { const d = m - this.prev; if (Math.abs(Math.abs(d) - 12) < 0.8 || Math.abs(Math.abs(d) - 19) < 0.8) { if (this.pend && Math.abs(this.pend.m - m) < 0.8) this.pend.n++; else this.pend = { m, n: 1 }; if (this.pend.n < 3) m = this.prev; else this.pend = null; } else this.pend = null; }
     this.prev = m; this.med.push(m); if (this.med.length > 3) this.med.shift();
     const s = this.med.slice().sort((p, q) => p - q); return s[s.length >> 1];
   }
 }
 // Offline clean-up of CREPE frames for the record's melody: voicing by confidence + level, 5-frame median, islands < 60 ms dropped.
-function cleanMelody(raw, hopSec) {
+function cleanMelody(raw, hopSec, thr = 0.5) {
   if (!raw.length) return [];
   let g = 0; for (const p of raw) g += p.rms * p.rms; g = Math.sqrt(g / raw.length);
-  const v = raw.map(p => p.conf >= 0.5 && p.rms > 0.05 * g);
-  // hysteresis: keep a frame with conf ≥ 0.4 if a neighbour is voiced
-  for (let pass = 0; pass < 2; pass++) for (let i = 0; i < raw.length; i++) if (!v[i] && raw[i].conf >= 0.4 && raw[i].rms > 0.05 * g && ((i > 0 && v[i - 1]) || (i + 1 < raw.length && v[i + 1]))) v[i] = true;
+  const v = raw.map(p => p.conf >= thr && p.rms > 0.05 * g);
+  // hysteresis: keep a slightly less confident frame if a neighbour is voiced
+  for (let pass = 0; pass < 2; pass++) for (let i = 0; i < raw.length; i++) if (!v[i] && raw[i].conf >= thr - 0.1 && raw[i].rms > 0.05 * g && ((i > 0 && v[i - 1]) || (i + 1 < raw.length && v[i + 1]))) v[i] = true;
   const sm = new Float32Array(raw.length);
   for (let i = 0; i < raw.length; i++) { if (!v[i]) continue; const w = []; for (let d = -2; d <= 2; d++) { const j = i + d; if (j >= 0 && j < raw.length && v[j]) w.push(raw[j].midi); } w.sort((a, b) => a - b); sm[i] = w[w.length >> 1]; }
-  const minFr = Math.ceil(0.06 / hopSec); const out = []; let start = -1;
+  const minFr = Math.ceil(0.08 / hopSec); const out = []; let start = -1;
   for (let i = 0; i <= raw.length; i++) { const on = i < raw.length && v[i]; if (on && start < 0) start = i; if (!on && start >= 0) { if (i - start >= minFr) for (let j = start; j < i; j++) out.push({ t: raw[j].t, midi: sm[j], conf: raw[j].conf }); start = -1; } }
   return out;
 }
@@ -938,7 +942,7 @@ if (typeof module !== 'undefined') { module.exports.PitchEngine = PitchEngine; m
 // {type:'push', mic, song|null, t}      → {type:'frames', t, frames:[{midi, conf, rms, src, bleed}]}
 // {type:'melody', x, sr, hop}           → {type:'melody', points:[{t, midi, conf}]}   (offline, for the record's lead vocal)
 if (typeof self !== 'undefined' && typeof document === 'undefined' && typeof WorkerGlobalScope !== 'undefined') {
-  let eng = null, session = null, ORT = null;
+  let eng = null, session = null, ORT = null, fullSession = null, fullUrl = null, fullTried = false;
   async function loadOrt(ortBase) {
     if (ORT) return ORT;
     try { ORT = await import(ortBase + 'ort.min.mjs'); }                                   // module worker (preferred)
@@ -958,11 +962,12 @@ if (typeof self !== 'undefined' && typeof document === 'undefined' && typeof Wor
   self.onmessage = async (e) => {
     const d = e.data;
     if (d.type === 'init') {
-      eng = new PitchEngine(d.sr, d.opts || {});
+      eng = new PitchEngine(d.sr, d.opts || {}); fullUrl = d.fullUrl || null;
       try { eng.model = await loadModel(d.ortBase, d.modelUrl, d.prefer); self.postMessage({ type: 'ready', nn: true, ep: session._ep }); }
       catch (err) { eng.model = null; self.postMessage({ type: 'ready', nn: false, error: String(err && err.message || err) }); }
       return;
     }
+    if (d.type === 'mode' && eng) { eng.P.headphones = !!d.headphones; return; }
     if (d.type === 'push' && eng) {
       const frames = [];
       await eng.push(d.mic, d.song, (midi, r, src) => frames.push({ midi, conf: r.conf, rms: r.rms, src, bleed: !!r.bleed }));
@@ -971,23 +976,35 @@ if (typeof self !== 'undefined' && typeof document === 'undefined' && typeof Wor
     }
     if (d.type === 'melody') {
       // offline: CREPE on the whole signal at the given hop (seconds), batched; falls back to trackMelody
-      const { x, sr, hop } = d; let pts = null;
-      if (session) {
+      const { x, sr, hop } = d; let pts = null, which = null;
+      // the song's melody deserves the big model (CREPE full, 88 MB): ~30× the compute of tiny, loaded once, GPU when available
+      if (session && fullUrl && !fullSession && !fullTried) {
+        fullTried = true;
+        try { self.postMessage({ type: 'melody', id: d.id, progress: 0, note: 'loading' }); const bytes = new Uint8Array(await (await fetch(fullUrl)).arrayBuffer());
+          const eps = typeof navigator !== 'undefined' && navigator.gpu && session._ep === 'webgpu' ? [['webgpu'], ['wasm']] : [['wasm']];
+          for (const ep of eps) { try { fullSession = await ORT.InferenceSession.create(bytes, { executionProviders: ep, graphOptimizationLevel: 'all' }); fullSession._ep = ep[0]; break; } catch (e) { fullSession = null; } }
+          if (fullSession) { const warm = await fullSession.run({ x: new ORT.Tensor('float32', new Float32Array(PE_WIN), [1, PE_WIN]) }); if (!warm.p || warm.p.data.length !== PE_BINS) fullSession = null; }
+        } catch (e) { fullSession = null; }
+      }
+      const sess = fullSession || session;
+      if (sess) {
         try {
           const dn = new Down16(sr); const y = dn.process(x); const H = Math.max(80, Math.round((hop || 0.01) * PE_SR)); const nFr = Math.max(0, Math.floor((y.length - PE_WIN) / H) + 1);
-          const probs = new Float32Array(nFr * PE_BINS); const BATCH = 64; let done = 0;
+          const probs = new Float32Array(nFr * PE_BINS); const BATCH = sess === fullSession ? (sess._ep === 'webgpu' ? 32 : 8) : 64; let done = 0; const t0 = Date.now();
           for (let f0 = 0; f0 < nFr; f0 += BATCH) {
             const n = Math.min(BATCH, nFr - f0); const B = new Float32Array(n * PE_WIN);
             for (let f = 0; f < n; f++) B.set(y.subarray((f0 + f) * H, (f0 + f) * H + PE_WIN), f * PE_WIN);
-            const r = await session.run({ x: new ORT.Tensor('float32', B, [n, PE_WIN]) }); probs.set(r.p.data, f0 * PE_BINS); done += n;
-            self.postMessage({ type: 'melody', id: d.id, progress: done / nFr });
+            const r = await sess.run({ x: new ORT.Tensor('float32', B, [n, PE_WIN]) }); probs.set(r.p.data, f0 * PE_BINS); done += n;
+            if ((f0 / BATCH) % 4 === 0) self.postMessage({ type: 'melody', id: d.id, progress: done / nFr });
+            // the big model on a CPU is too slow for long songs: fall back to tiny if this would take over 3 minutes
+            if (sess === fullSession && sess._ep !== 'webgpu' && done >= 64 && (Date.now() - t0) / done * nFr > 180000) throw new Error('too slow');
           }
           const raw = []; for (let f = 0; f < nFr; f++) { const r = PitchEngine.decode(probs, f * PE_BINS); let e = 0; for (let i = 0; i < PE_WIN; i += 4) { const v = y[f * H + i]; e += v * v; } raw.push({ t: (f * H + PE_WIN / 2) / PE_SR, midi: r.midi, conf: r.conf, rms: Math.sqrt(e / (PE_WIN / 4)) }); }
-          pts = cleanMelody(raw, H / PE_SR);
-        } catch (err) { pts = null; }
+          pts = cleanMelody(raw, H / PE_SR, sess === fullSession ? 0.6 : 0.5); which = sess === fullSession ? 'full' : 'tiny';
+        } catch (err) { pts = null; if (sess === fullSession && session) { fullSession = null; return self.onmessage(e); } }
       }
-      if (!pts) pts = trackMelody(x, sr).map(p => ({ t: p.t, midi: p.midi, conf: 1 }));
-      self.postMessage({ type: 'melody', id: d.id, points: pts, nn: !!session });
+      if (!pts) { pts = trackMelody(x, sr).map(p => ({ t: p.t, midi: p.midi, conf: 1 })); which = 'nsdf'; }
+      self.postMessage({ type: 'melody', id: d.id, points: pts, nn: !!sess, model: which });
     }
   };
 }
@@ -1354,6 +1371,25 @@ const trace = $('trace'), tctx = trace.getContext('2d');
 let recNode = null, recording = null, take = null, refRec = null;
 // The pitch engine (CREPE neural pitch tracker + song-leak logic, see pitch.js) runs in its own worker so the audio thread stays light.
 const PITCH = { worker: null, ready: false, nn: null, stats: null, k: null, seq: 0, blocks: new Map() };
+// How you listen. Headphones: the mic hears only you, nothing is filtered. Speakers: the browser's echo canceller plus Shed's
+// own song-leak logic keep the record out of your pitch line. Auto-detected from the output device name; tap to override.
+const OUT = { headphones: false, manual: false };   // speakers (the careful setting) unless headphones are detected or chosen
+try { const v = localStorage.getItem('shed.out'); if (v === 'hp' || v === 'spk') { OUT.headphones = v === 'hp'; OUT.manual = true; } } catch (e) {}
+function outUI() { const b = $('outMode'); b.textContent = OUT.headphones ? '🎧 Headphones' : '🔊 Speakers'; b.classList.toggle('on', !OUT.headphones); }
+outUI();
+async function detectOutput() {
+  if (OUT.manual || !navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+  try { const devs = await navigator.mediaDevices.enumerateDevices(); const outs = devs.filter(d => d.kind === 'audiooutput'); if (!outs.length) return;
+    const lbl = (outs.find(d => d.deviceId === 'default') || outs[0]).label.toLowerCase();
+    if (!lbl) return; OUT.headphones = /headphone|airpod|earbud|buds|beats|bluetooth|headset|wh-|wf-|earphone/.test(lbl); outUI();
+  } catch (e) {}
+}
+$('outMode').addEventListener('click', async () => {
+  OUT.headphones = !OUT.headphones; OUT.manual = true; try { localStorage.setItem('shed.out', OUT.headphones ? 'hp' : 'spk'); } catch (e) {} outUI();
+  if (PITCH.worker) PITCH.worker.postMessage({ type: 'mode', headphones: OUT.headphones });
+  if (micOn) { await micToggle(true); await micToggle(true); }   // re-open the mic with the matching echo-cancellation setting
+  toast(OUT.headphones ? 'Headphones: the mic is taken as you alone.' : 'Speakers: the song is filtered out of the mic.');
+});
 function pitchWorker() {
   if (PITCH.worker) return PITCH.worker;
   let w; try { w = new Worker(pitchURL, { type: 'module' }); } catch (e) { w = new Worker(pitchURL); } PITCH.worker = w;
@@ -1364,7 +1400,7 @@ function pitchWorker() {
     if (d.type === 'frames') { const b = PITCH.blocks.get(d.t); PITCH.blocks.delete(d.t); PITCH.stats = d.stats; PITCH.k = d.k; PITCH.nn = d.nn; if (b) for (const f of d.frames) b(f); return; }
     if (d.type === 'melody' && PITCH.onMelody) PITCH.onMelody(d);
   };
-  PITCH.initMsg = { type: 'init', sr: ctx.sampleRate, modelUrl: new URL('models/crepe-tiny.onnx?b=' + SHED_BUILD, location.href).href, ortBase: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/', prefer: new URLSearchParams(location.search).get('pitch') };
+  PITCH.initMsg = { type: 'init', sr: ctx.sampleRate, modelUrl: new URL('models/crepe-tiny.onnx?b=' + SHED_BUILD, location.href).href, fullUrl: new URL('models/crepe-full.onnx', location.href).href, opts: { headphones: OUT.headphones }, ortBase: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/', prefer: new URLSearchParams(location.search).get('pitch') };
   w.postMessage(PITCH.initMsg);
   return w;
 }
@@ -1384,7 +1420,8 @@ async function micToggle(quiet) {
   if (micOn) { try { localStorage.setItem('shed.mic', '0'); } catch (e) {} if (recording) stopRecording(); if (refRec) stopRef(); micOn = false; micStream.getTracks().forEach(t => t.stop()); micStream = null; if (recNode) { recNode.onaudioprocess = null; recNode.disconnect(); recNode = null; } PITCH.blocks.clear(); $('mic').textContent = 'Start mic'; $('mic').classList.remove('on'); $('note').textContent = '—'; $('hz').textContent = ''; lastMidi = null; return; }
   ensureCtx();
   try {
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: false, autoGainControl: false } });
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: !OUT.headphones, noiseSuppression: false, autoGainControl: false } });
+    detectOutput().then(() => { if (PITCH.worker) PITCH.worker.postMessage({ type: 'mode', headphones: OUT.headphones }); });
   } catch (err) { if (!quiet) toast('Microphone not available here. Allow mic access in your browser, or open Shed in Safari/Chrome.'); return; }
   try { localStorage.setItem('shed.mic', '1'); } catch (e) {}
   const pw = pitchWorker();
@@ -1478,14 +1515,17 @@ function toNotes(P, dur) {
   for (const p of pts) {
     const m = p.midi - tune;
     if (cur && sec(cur.lastF, p.frac) > 0.09) close(cur.lastF);
-    if (!cur) { cur = { q: Math.round(m), a: p.frac, lastF: p.frac, v: [m] }; continue; }
-    if (Math.abs(m - cur.q) <= 0.6) { cur.v.push(m); cur.lastF = p.frac; cand = null; continue; }
-    if (!cand || Math.abs(m - cand.q) > 0.6) cand = { q: Math.round(m), a: p.frac, v: [] };
-    cand.v.push(m); cur.lastF = p.frac;
-    if (sec(cand.a, p.frac) >= 0.06) { const c = cand; close(c.a); cur = { q: c.q, a: c.a, lastF: p.frac, v: c.v }; }
+    if (!cur) { cur = { q: Math.round(m), a: p.frac, lastF: p.frac, v: [m], c: [p.c == null ? 1 : p.c] }; continue; }
+    if (Math.abs(m - cur.q) <= 0.6) { cur.v.push(m); cur.c.push(p.c == null ? 1 : p.c); cur.lastF = p.frac; cand = null; continue; }
+    if (!cand || Math.abs(m - cand.q) > 0.6) cand = { q: Math.round(m), a: p.frac, v: [], c: [] };
+    cand.v.push(m); cand.c.push(p.c == null ? 1 : p.c); cur.lastF = p.frac;
+    if (sec(cand.a, p.frac) >= 0.06) { const c = cand; close(c.a); cur = { q: c.q, a: c.a, lastF: p.frac, v: c.v, c: c.c }; }
   }
   close(cur ? cur.lastF : 0);
-  let notes = segs.map(s => { const v = s.v.slice().sort((a, b) => a - b); return { a: s.a, b: s.b, m: Math.round(v[v.length >> 1]) }; }).filter(n => sec(n.a, n.b) >= 0.08);
+  // a note must last 90 ms and the tracker must have been sure of it (median confidence); short unsure blips are not music
+  let notes = segs.map(s => { const v = s.v.slice().sort((a, b) => a - b), c = s.c.slice().sort((a, b) => a - b); return { a: s.a, b: s.b, m: Math.round(v[v.length >> 1]), conf: c[c.length >> 1] }; }).filter(n => sec(n.a, n.b) >= 0.09 && (n.conf >= 0.55 || sec(n.a, n.b) >= 0.25));
+  // range outliers: a short note more than an octave and a half from the melody around it is not the singer
+  { const win = 12; for (let i = 0; i < notes.length; i++) { const n = notes[i]; if (sec(n.a, n.b) > 0.5) continue; const nb = []; for (let j = Math.max(0, i - win); j < Math.min(notes.length, i + win + 1); j++) if (j !== i) nb.push(notes[j].m); if (nb.length < 6) continue; nb.sort((a, b) => a - b); const med = nb[nb.length >> 1]; if (Math.abs(n.m - med) > 19) n.dead = true; } notes = notes.filter(n => !n.dead); }
   // a lone note an octave away from both neighbours is a tracking slip
   for (let i = 1; i < notes.length - 1; i++) { const p = notes[i - 1], n = notes[i], q = notes[i + 1]; if (sec(p.b, n.a) > 1 || sec(n.b, q.a) > 1 || sec(n.a, n.b) > 0.4) continue; const d1 = n.m - p.m, d2 = n.m - q.m; if (Math.abs(d1) >= 10 && Math.abs(d2) >= 10 && Math.sign(d1) === Math.sign(d2)) n.m -= 12 * Math.sign(d1); }
   // scoops, fall-offs and wide vibrato: a short blip a half step from the note it leans on is part of that note
@@ -1505,7 +1545,7 @@ function noteAtFrac(notes, f) { let lo = 0, hi = notes.length - 1; while (lo < h
 const karShift = () => S.semis - (S.ref ? S.ref.semis || 0 : 0);
 // ---------- The take: every pass with the song is kept and scored, note by note ----------
 const TAKE = { on: false, a: 0, b: 0, frames: [], loops: 0 };
-function takeStart(frac) { TAKE.on = true; TAKE.a = frac; TAKE.b = frac; TAKE.frames = []; TAKE.loops = S.loops; }
+function takeStart(frac) { TAKE.on = true; TAKE.a = frac; TAKE.b = frac; TAKE.frames = []; TAKE.loops = S.loops; KAR.locked = false; KAR.pairs.length = 0; KAR.octVotes = 0; }
 function takeFrame(frac, note, d) { if (!TAKE.on) return; if (frac < TAKE.b - 0.02) { takeFinish(); takeStart(frac); } TAKE.b = Math.max(TAKE.b, frac); TAKE.frames.push({ frac, note, d }); }
 function takeFinish() {
   if (!TAKE.on) return; TAKE.on = false;
@@ -1561,10 +1601,10 @@ function karaokeFrame(midi, frac) {
 }
 // which octave you sing the song in (decided from what you actually sing, changes only when it's clear)
 function karaokeOctave() {
-  if (KAR.pairs.length < 40) return; const s = KAR.pairs.slice().sort((a, b) => a - b); const o = 12 * Math.round(s[s.length >> 1] / 12);
-  if (o === KAR.oct) { KAR.octVotes = 0; return; }
+  // decided once per pass from the first seconds you sing, then locked, so the bars never jump while you sing
+  if (KAR.locked || KAR.pairs.length < 60) return; const s = KAR.pairs.slice().sort((a, b) => a - b); const o = 12 * Math.round(s[s.length >> 1] / 12);
   if (o === KAR.octCand) KAR.octVotes++; else { KAR.octCand = o; KAR.octVotes = 1; }
-  if (KAR.octVotes >= 2) { KAR.oct = o; KAR.octVotes = 0; }
+  if (KAR.octVotes >= 2) { KAR.oct = o; KAR.locked = true; }
 }
 function refOctave() { return KAR.oct; }
 function rrect(c, x, y, w, h, r) { r = Math.min(r, w / 2, h / 2); c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r); c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath(); }
@@ -1649,6 +1689,10 @@ function drawTrace(now) {
       if (k >= 0) { let d = p.midi - (notes[k].m + karShift()); d -= 12 * Math.round(d / 12); col = Math.abs(d) <= 0.5 ? good : warn; }
       if (prev) { tctx.strokeStyle = col; tctx.beginPath(); tctx.moveTo(prev.x, prev.y); tctx.lineTo(x, y); tctx.stroke(); }
       prev = { x, y, f: p.frac }; lastPt = { x, y, col };
+    }
+    if (TAKE.on && TAKE.frames.length > 60) {   // running accuracy of this pass: of the moments a note was due and you sang, how many were on it
+      let on = 0, tot = 0; for (const f of TAKE.frames) if (f.note >= 0) { tot++; if (Math.abs(f.d) <= 0.5) on++; }
+      if (tot > 40) { const pc = Math.round(100 * on / tot); tctx.font = '600 13px system-ui, sans-serif'; tctx.textBaseline = 'top'; const msg = 'On pitch ' + pc + '%'; const tw = tctx.measureText(msg).width; tctx.fillStyle = 'rgba(20,22,30,0.8)'; tctx.fillRect(W - tw - 18, H - 28, tw + 12, 22); tctx.fillStyle = pc >= 80 ? good : pc >= 55 ? acc : warn; tctx.fillText(msg, W - tw - 12, H - 24); }
     }
     if (KAR.tip) { tctx.font = '12px system-ui, sans-serif'; tctx.textBaseline = 'top'; const msg = 'The song is loud in your mic · headphones make this exact'; const tw = tctx.measureText(msg).width; tctx.fillStyle = 'rgba(20,22,30,0.8)'; tctx.fillRect(W - tw - 18, 6, tw + 12, 20); tctx.fillStyle = 'rgba(238,240,246,0.8)'; tctx.fillText(msg, W - tw - 12, 10); }
     if (lastPt && lastMidi != null) { tctx.fillStyle = lastPt.col; tctx.beginPath(); tctx.arc(lastPt.x, lastPt.y, 5, 0, Math.PI * 2); tctx.fill(); }
@@ -2114,6 +2158,7 @@ function syncMini() {
 // ---------- Stems: UVR MDX-Net models (Kim Vocal 2 for the vocals, Karaoke 2 for lead vs backing), separated on this device ----------
 S.vocal = 0; S.srcFull = null; S.stems = null;
 const VOC_MODEL = 'models/kim_vocal_2.onnx', VOC_PARAMS = { nfft: 7680, dimF: 3072, compensate: 1.009 };
+const INST_MODEL = 'models/inst_hq_3.onnx', INST_PARAMS = { nfft: 6144, dimF: 3072, compensate: 1.022 };   // instrumental model for the Best-quality ensemble
 let demucsLoading = null;
 function ensureDemucs() { if (window.ShedDemucs) return Promise.resolve(window.ShedDemucs); if (!demucsLoading) demucsLoading = new Promise((res, rej) => { const sc = document.createElement('script'); sc.src = 'demucs/shed-demucs.js?b=' + SHED_BUILD; sc.onload = () => res(window.ShedDemucs); sc.onerror = () => rej(new Error('engine missing')); document.head.appendChild(sc); }); return demucsLoading; }
 const KARA_MODEL = 'models/kara2.onnx', KARA_PARAMS = { nfft: 5120, dimF: 2048, compensate: 1.065 };
@@ -2129,24 +2174,34 @@ async function separateVocals() {
   try {
     const t0 = performance.now();
     const best = !separateVocals.fast;
-    // Best: 50% chunk overlap and the UVR "denoise" pass (model run twice, phase-inverted, averaged) — fewer artifacts, ~3× the time.
-    const o = best ? { denoise: true, overlap: 0.5 } : { denoise: false, overlap: 0.25 };
+    // Fast: the vocal model once (25% overlap). Best: 50% overlap + the UVR "denoise" pass (model run twice, phase-inverted,
+    // averaged), plus a second, instrumental-trained model; the band is the per-bin quieter of the two estimates ("Min Spec"),
+    // so anything either model still heard as voice is gone from the backing track.
+    const o = best ? { denoise: true, overlap: 0.5 } : { denoise: false, overlap: 0.25 }; const n = L.length;
     const all = await D.separateMDX(L, R, S.sr, VOC_MODEL, VOC_PARAMS, prog('Vocals'), o);
-    const kara = await D.separateMDX(L, R, S.sr, KARA_MODEL, KARA_PARAMS, prog('Lead vocal'), o);
-    all.vocalsL = all.L; all.vocalsR = all.R;
-    // cleanup: vocal stems carry no music below 60 Hz; what the nets put there is kick and bass bleed
-    for (const a of [all.vocalsL, all.vocalsR]) D.highpass(a, S.sr, 60);
-    // Karaoke 2 returns band + backing vocals; the lead is what is left
-    const n = L.length, leadL = new Float32Array(n), leadR = new Float32Array(n);
-    for (let i = 0; i < n; i++) { leadL[i] = L[i] - kara.L[i]; leadR[i] = R[i] - kara.R[i]; }
+    let vocL = all.L, vocR = all.R;
+    if (best) {
+      const inst = await D.separateMDX(L, R, S.sr, INST_MODEL, INST_PARAMS, prog('Band'), o);
+      st.textContent = 'Combining…';
+      const aL = new Float32Array(n), aR = new Float32Array(n); for (let i = 0; i < n; i++) { aL[i] = L[i] - vocL[i]; aR[i] = R[i] - vocR[i]; }
+      const [bL, bR] = await D.ensembleMin(aL, aR, inst.L, inst.R);
+      vocL = new Float32Array(n); vocR = new Float32Array(n); for (let i = 0; i < n; i++) { vocL[i] = L[i] - bL[i]; vocR[i] = R[i] - bR[i]; }
+    }
+    // vocal stems carry no music below 60 Hz; what the nets put there is kick and bass bleed
+    D.highpass(vocL, S.sr, 60); D.highpass(vocR, S.sr, 60);
+    // lead vs backing: Karaoke 2 run on the vocal stem (not the mix) — it only has voices to decide between, so far fewer artifacts
+    const kara = await D.separateMDX(vocL, vocR, S.sr, KARA_MODEL, KARA_PARAMS, prog('Lead vocal'), o);
+    const leadL = new Float32Array(n), leadR = new Float32Array(n);
+    for (let i = 0; i < n; i++) { leadL[i] = vocL[i] - kara.L[i]; leadR[i] = vocR[i] - kara.R[i]; }
     D.highpass(leadL, S.sr, 60); D.highpass(leadR, S.sr, 60);
-    S.stems = { L: all.vocalsL, R: all.vocalsR, leadL, leadR };
+    all.ep = all.ep || kara.ep;
+    S.stems = { L: vocL, R: vocR, leadL, leadR };
     stemsUI();
     $('stemHint').textContent = (best ? 'Best quality: ' : 'Fast: ') + 'separated in ' + Math.round((performance.now() - t0) / 1000) + ' s on this computer (' + (all.ep === 'webgpu' ? 'GPU' : 'CPU') + '). Saved with the song.';
     st.textContent = 'Reading the melody…';
     await melodyFromLead((f) => { st.textContent = 'Reading the melody ' + Math.round(f * 100) + '%'; });
-    saveSongSoon(); setVocal(2);
-    toast('Done. Lead off keeps the backing vocals; the melody from the record is now the ghost line.');
+    saveSongSoon(); setVocal(4);
+    toast('Done. Vocals off is playing; Lead off keeps the backing vocals. The song’s melody is now on the pitch lane.');
   } catch (e) {
     console.error(e); st.textContent = 'Ready'; btn.disabled = false; $('sepFast').disabled = false;
     toast('Separation failed: ' + (e.message || e) + '. Try again, or a shorter file.');
@@ -2159,8 +2214,8 @@ function melodyFromLead(onProgress) {
     const n = S.stems.leadL.length, mono = new Float32Array(n); for (let i = 0; i < n; i++) mono[i] = 0.5 * (S.stems.leadL[i] + S.stems.leadR[i]);
     ensureCtx(); const pw = pitchWorker(); const id = 'mel' + Date.now();
     PITCH.onMelody = (d) => { if (d.id !== id) return; if (d.progress != null && !d.points) { if (onProgress) onProgress(d.progress); return; }
-      const pts = d.points.map(p => ({ frac: p.t / S.dur, midi: p.midi })).filter(p => p.frac >= 0 && p.frac <= 1);
-      if (pts.length > 20) { S.ref = { points: pts, semis: 0, auto: true, nn: !!d.nn }; updateRefUI(); } PITCH.onMelody = null; res(); };
+      const pts = d.points.map(p => ({ frac: p.t / S.dur, midi: p.midi, c: p.conf })).filter(p => p.frac >= 0 && p.frac <= 1);
+      if (pts.length > 20) { S.ref = { points: pts, semis: 0, auto: true, nn: !!d.nn, model: d.model }; updateRefUI(); } PITCH.onMelody = null; res(); };
     pw.postMessage({ id, type: 'melody', x: mono, sr: S.sr, hop: 0.01 }, [mono.buffer]);
   });
 }
@@ -2173,7 +2228,7 @@ function setVocal(level) {
   if ((level === 1 || level === 2 || level === 3) && S.stems && !S.stems.leadL) level = level === 3 ? 4 : 4; // old stems without a lead track
   S.vocal = level;
   document.querySelectorAll('[data-v]').forEach(b => b.classList.toggle('on', +b.dataset.v === level));
-  $('voclbl').textContent = ['full', 'lead −12 dB', 'lead off', 'lead only', 'band only'][level];
+  $('voclbl').textContent = ['full mix', 'lead −12 dB', 'lead off', 'lead only', 'vocals off'][level];
   if (!level) S.src = S.srcFull;
   else {
     const full = S.srcFull, L = full[0], R = full[1] || full[0], n = L.length, g = level === 1 ? 0.25 : 0;
@@ -2199,7 +2254,7 @@ autoMic();
 document.addEventListener('pointerdown', () => { autoMic(); }, { once: true });
 
 // ---------- Offline: keep the app and the piano on the device once installed ----------
-const SHED_BUILD = '2610161803';
+const SHED_BUILD = '2610251953';
 if ('serviceWorker' in navigator && window.top === window.self && /^https?:/.test(location.protocol)) {
   navigator.serviceWorker.register('sw.js?b=' + SHED_BUILD).then(reg => { reg.update().catch(() => {}); setInterval(() => reg.update().catch(() => {}), 60 * 60 * 1000); }).catch(() => {});
   navigator.serviceWorker.addEventListener('message', (e) => { if (e.data && e.data.type === 'shed-updated' && e.data.build !== SHED_BUILD) showUpdate(); });

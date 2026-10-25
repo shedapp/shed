@@ -113,6 +113,24 @@
     return istft2(Ar, Ai, Br, Bi, T, nfft, MDX.HOP, false, len);
   }
   // Butterworth high-pass (two cascaded biquads, Q = 0.54 and 1.31 → 4th order), in place, with a short fade to avoid a start click
+  // "Min Spec" ensemble (UVR): per STFT bin keep whichever of the two estimates is quieter. For an instrumental this removes
+  // anything either model still heard as voice; the cost is a touch of dullness where the two disagree.
+  function specMin(aL, aR, bL, bR) {
+    const nfft = 4096, hop = 1024, A = stft2(aL, aR, nfft, hop, false), B = stft2(bL, bR, nfft, hop, false), n = A.Ar.length;
+    for (let i = 0; i < n; i++) {
+      if (B.Ar[i] * B.Ar[i] + B.Ai[i] * B.Ai[i] < A.Ar[i] * A.Ar[i] + A.Ai[i] * A.Ai[i]) { A.Ar[i] = B.Ar[i]; A.Ai[i] = B.Ai[i]; }
+      if (B.Br[i] * B.Br[i] + B.Bi[i] * B.Bi[i] < A.Br[i] * A.Br[i] + A.Bi[i] * A.Bi[i]) { A.Br[i] = B.Br[i]; A.Bi[i] = B.Bi[i]; }
+    }
+    return istft2(A.Ar, A.Ai, A.Br, A.Bi, A.nfr, nfft, hop, false, aL.length);
+  }
+  // Windowed-sinc rate conversion (anti-aliased, 16 taps each side); used instead of the cubic one for 48 k → 44.1 k.
+  function resampleSinc(input, ratio) {
+    const outLen = Math.floor(input.length / ratio), out = new Float32Array(outLen), n = input.length, K = 16, cut = Math.min(1, 1 / ratio);
+    for (let i = 0; i < outLen; i++) { const x = i * ratio, j = Math.floor(x), fr = x - j; let acc = 0, wsum = 0;
+      for (let k = -K; k <= K; k++) { const idx = Math.min(n - 1, Math.max(0, j + k)); const d = k - fr; const sx = Math.PI * d * cut; const sinc = d === 0 ? 1 : Math.sin(sx) / sx; const w = sinc * cut * (0.5 + 0.5 * Math.cos(Math.PI * d / (K + 1))); acc += input[idx] * w; wsum += w; }
+      out[i] = acc / (wsum || 1); }
+    return out;
+  }
   function highpass(x, sr, fc) {
     for (const Q of [0.5412, 1.3066]) {
       const w0 = 2 * Math.PI * fc / sr, cw = Math.cos(w0), sw = Math.sin(w0), al = sw / (2 * Q);
@@ -125,7 +143,7 @@
   }
   function resample(input, ratio) { const outLen = Math.floor(input.length / ratio), out = new Float32Array(outLen), n = input.length; for (let i = 0; i < outLen; i++) { const x = i * ratio; const j = x | 0; const t = x - j; const y0 = input[j - 1 < 0 ? 0 : j - 1], y1 = input[j], y2 = input[j + 1 < n ? j + 1 : n - 1], y3 = input[j + 2 < n ? j + 2 : n - 1]; const a = (3 * (y1 - y2) - y0 + y3) / 2, b = 2 * y2 + y0 - (5 * y1 + y3) / 2, c = (y2 - y0) / 2; out[i] = ((a * t + b) * t + c) * t + y1; } return out; }
 
-  const api = { demucsPrep, demucsPost, mdxSpek, mdxWave, makeFFTmixed, stft2, istft2, highpass, SEG, SR };
+  const api = { demucsPrep, demucsPost, mdxSpek, mdxWave, makeFFTmixed, stft2, istft2, highpass, specMin, resampleSinc, SEG, SR };
 
   // ---------- Worker side ----------
   if (inWorker) {
@@ -135,6 +153,8 @@
       else if (op === 'demucsPost') { const [a, b] = demucsPost(e.data.zv, e.data.tv, e.data.m2, e.data.d); r = { L: a, R: b }; tr = [a.buffer, b.buffer]; }
       else if (op === 'mdxSpek') { const s = mdxSpek(e.data.L, e.data.R, e.data.nfft, e.data.dimF); r = { spek: s }; tr = [s.buffer]; }
       else if (op === 'mdxWave') { const [a, b] = mdxWave(e.data.spek, e.data.nfft, e.data.len, e.data.dimF); r = { L: a, R: b }; tr = [a.buffer, b.buffer]; }
+      else if (op === 'specMin') { const [a, b] = specMin(e.data.aL, e.data.aR, e.data.bL, e.data.bR); r = { L: a, R: b }; tr = [a.buffer, b.buffer]; }
+      else if (op === 'resample') { const a = resampleSinc(e.data.x, e.data.ratio); r = { y: a }; tr = [a.buffer]; }
       self.postMessage({ id, r }, tr);
     };
     root.ShedDemucs = api; return;
@@ -228,7 +248,7 @@
     opts = Object.assign({ denoise: false, overlap: 0.25 }, opts || {});
     const sess = await getSession(modelUrl, [modelUrl], onProgress); const ort = root.ort;
     const nfft = params.nfft, comp = params.compensate, overlap = opts.overlap, dimF = params.dimF || MDX.DIM_F;
-    let L = inL, R = inR; const ratio = sr / SR; if (Math.abs(ratio - 1) > 1e-6) { L = resample(inL, ratio); R = resample(inR, ratio); }
+    let L = inL, R = inR; const ratio = sr / SR; if (Math.abs(ratio - 1) > 1e-6) { L = resampleSinc(inL, ratio); R = resampleSinc(inR, ratio); }
     const T = L.length, chunk = MDX.HOP * (MDX.DIM_T - 1), trim = nfft >> 1, step = Math.floor(chunk * (1 - overlap));
     const padLen = trim + T + chunk; const mL = new Float32Array(padLen), mR = new Float32Array(padLen); mL.set(L, trim); mR.set(R, trim);
     const rL = new Float32Array(padLen), rR = new Float32Array(padLen), div = new Float32Array(padLen); const win = getWin(chunk);
@@ -249,5 +269,18 @@
     return { L: oL, R: oR, ep: sess._ep };
   }
   const separateKaraoke = separateMDX;
-  root.ShedDemucs = Object.assign(api, { separateVocals, separateKaraoke, separateMDX, getSession, canRun: () => !!navigator.gpu });
+  // Min-spec ensemble of two stereo estimates, in 12 s pieces with 1 s crossfades, spread over the worker pool.
+  async function ensembleMin(aL, aR, bL, bR) {
+    const n = aL.length, piece = Math.round(12 * SR), fade = Math.round(1 * SR); const oL = new Float32Array(n), oR = new Float32Array(n), ws = new Float32Array(n);
+    const jobs = [];
+    for (let s = 0; s < n; s += piece - fade) {
+      const e = Math.min(n, s + piece); const cL = aL.slice(s, e), cR = aR.slice(s, e), dL = bL.slice(s, e), dR = bR.slice(s, e);
+      jobs.push(job('specMin', { aL: cL, aR: cR, bL: dL, bR: dR }, [cL.buffer, cR.buffer, dL.buffer, dR.buffer]).then(r => { const len = e - s; for (let i = 0; i < len; i++) { const w = Math.min(1, (i + 1) / fade, (len - i) / fade); oL[s + i] += r.L[i] * w; oR[s + i] += r.R[i] * w; ws[s + i] += w; } }));
+      if (e >= n) break;
+    }
+    await Promise.all(jobs);
+    for (let i = 0; i < n; i++) { const w = ws[i] || 1; oL[i] /= w; oR[i] /= w; }
+    return [oL, oR];
+  }
+  root.ShedDemucs = Object.assign(api, { separateVocals, separateKaraoke, separateMDX, ensembleMin, getSession, canRun: () => !!navigator.gpu });
 })(typeof self !== 'undefined' ? self : (typeof globalThis !== 'undefined' ? globalThis : this));
