@@ -2509,6 +2509,32 @@ const Reharm = (() => {
       outs.forEach(o => { o.depth = min; o.weight = w; o.style = style; });
       all = all.concat(outs);
     }
+    // playability: a reharmonization mostly REPLACES chords. The result may be at most two chords longer than the
+    // phrase the writer played (a bar can take two chords, never a chain of four). Anything longer is condensed
+    // back into the same bars, keeping the later approach and arrival chords so the cadence stays intact.
+    const maxLen = opts._maxLen || (prog.length + 2);
+    const spans = []; { let b = 0; for (const c of prog) { spans.push(b + beats(c)); b += beats(c); } }
+    const spanOf = (t) => { for (let i = 0; i < spans.length; i++) if (t < spans[i] - 1e-6) return i; return spans.length - 1; };
+    const condense = (p) => {
+      if (p.length <= prog.length) return p;
+      const groups = prog.map(() => []); let t = 0;
+      p.forEach(c => { groups[spanOf(t + 1e-6)].push(c); t += beats(c); });
+      let over = p.length - maxLen; let dropped = 0;
+      const dropOne = (i) => {
+        const g = groups[i];
+        let idx = g.findIndex((c, j) => j < g.length - 1 && !T.sameChord(c, prog[i]));
+        if (idx < 0) idx = T.sameChord(g[0], prog[i]) ? g.length - 1 : 0;
+        const gone = g.splice(idx, 1)[0]; const nb = Math.min(idx, g.length - 1);
+        g[nb] = Object.assign({}, g[nb], { beats: beats(g[nb]) + beats(gone) }); dropped++;
+      };
+      // never more than two chords in the bar of one source chord
+      groups.forEach((g, i) => { while (g.length > 2) { dropOne(i); over--; } });
+      // then the overall budget: thin out the earliest bars first, so the turnaround and cadence keep their color
+      for (let i = 0; i < groups.length && over > 0; i++) while (groups[i].length > 1 && over > 0) { dropOne(i); over--; }
+      if (over > 0) return null;
+      return dropped ? [].concat(...groups) : p;
+    };
+    all = all.map(o => { const q = condense(o.prog); if (!q) return null; if (q !== o.prog) { o.prog = q; o.condensed = true; } return o; }).filter(o => o && o.prog.some(c => c.changed));
     // dedupe identical results and results identical to the input
     const sig = (p) => p.map(c => `${c.root}:${c.q}:${c.bass ?? ''}:${Math.round((c.beats || 4) * 4)}`).join('|');
     const inSig = sig(prog);
@@ -2541,6 +2567,7 @@ const Reharm = (() => {
       if (depth >= 4 && o.impact <= 0.5) score -= 1.2 * (depth - 3);
       if (opts.mood) score += 1.6 * (M.gemsById(String(opts.mood).split(':')[0]) ? M.gemsMatch(o.mood.focus || o.mood, opts.mood, o.family) : M.moodMatch(o.mood.focus || o.mood, opts.mood));
       o.gems = M.gemsOf(o.mood.focus || o.mood, o.family);
+      { const grow = o.prog.length - prog.length; score += grow <= 0 ? 0.5 : -0.35 * grow; } // a rewrite replaces; extra chords cost
       if (o.clashes.length) score -= 2.5 * o.clashes.length;
       o.score = score;
     });
@@ -2562,14 +2589,17 @@ const Reharm = (() => {
         let base = prog.map(c => Object.assign({}, c, { changed: undefined })); const chain = []; const used = new Set();
         let kept = []; // chords earlier steps introduced; a later step may not undo them
         for (let step = 0; step < steps; step++) {
-          const subs = ideas(base, key, Object.assign({}, opts, { compose: false, limit: 16, mood: null }));
-          const pick = subs.find(o => !skip.has(o.family) && !used.has(o.family) && (step > 0 || !firstFamily || o.family === firstFamily) && o.prog.length <= 12 && kept.every(k => o.prog.some(c => T.sameChord(c, k))));
+          const subs = ideas(base, key, Object.assign({}, opts, { compose: false, limit: 16, mood: null, _maxLen: maxLen }));
+          const pick = subs.find(o => !skip.has(o.family) && !used.has(o.family) && (step > 0 || !firstFamily || o.family === firstFamily) && o.prog.length <= maxLen && kept.every(k => o.prog.some(c => T.sameChord(c, k))));
           if (!pick) break;
           used.add(pick.family); chain.push(pick);
           kept = kept.concat(pick.prog.filter(c => c.changed));
           base = pick.prog.map(c => Object.assign({}, c, { changed: undefined }));
         }
         if (chain.length < 2) return null;
+        // the chain shifts chord lengths; pull the result back onto the bars of the phrase that was played
+        { const q = condense(base); if (!q) return null; base = q; }
+        if (Math.abs(base.reduce((a, c) => a + beats(c), 0) - total) > 1e-6 || base.length > maxLen || (prog.every(c => Number.isInteger(beats(c))) && base.some(c => !Number.isInteger(beats(c))))) return null;
         base = base.map(c => kept.some(k => T.sameChord(k, c)) ? Object.assign({}, c, { lock: true }) : c);
         const rec = X.recolor(base, key, style, depth); if (rec.length) base = rec[0].prog;
         base = base.map(c => { const o = Object.assign({}, c); delete o.lock; return o; });
@@ -3735,7 +3765,7 @@ if (typeof module !== 'undefined') module.exports = Sync;
   const T = Theory, M = Mood, R = Reharm, V = Voicing, A = Audio;
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  const BUILD = 'v0.8.0';
+  const BUILD = 'v0.8.1';
 
   // ---------- state ----------
   const DEFAULTS = { symbols: 'plain', twoHands: false, span: 'default', sound: true, tone: 'grand', feel: 'hold', bpm: 76, look: 'night', fingers: false, instrument: 'piano', styles: ['neosoul', 'gospel'] };
