@@ -19,3 +19,9 @@ Install on a phone: open the link, then iPhone → Share → *Add to Home Screen
 - `piano/` – Salamander Grand Piano samples (CC BY 3.0, see `piano/CREDITS.md`)
 
 Rebuild with `node src/build.js` (output lands in `src/dist/`; copy `shed.html` to `index.html`).
+
+## Also in this repository
+
+- `changes/` – **Changes**, the harmony workspace: https://shedapp.github.io/shed/changes/
+- `ears/` – **EARS**, the ear-training tutor: https://shedapp.github.io/shed/ears/
+- `piano/` – the Salamander Grand Piano samples shared by all three apps

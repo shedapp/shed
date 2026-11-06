@@ -1,0 +1,16 @@
+{
+  "name": "EARS — Ear Training",
+  "short_name": "EARS",
+  "description": "Ear training for elite musicians: intervals, scale degrees, dictation, chords, modes, Roman-numeral harmony, rhythm and singing.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0c0e13",
+  "theme_color": "#0c0e13",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
