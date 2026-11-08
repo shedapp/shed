@@ -25,3 +25,4 @@ Rebuild with `node src/build.js` (output lands in `src/dist/`; copy `shed.html` 
 - `changes/` – **Changes**, the harmony workspace: https://shedapp.github.io/shed/changes/
 - `ears/` – **EARS**, the ear-training tutor: https://shedapp.github.io/shed/ears/
 - `piano/` – the Salamander Grand Piano samples shared by all three apps
+- `panoramia/` – **PanoramIA**, the dental imaging registry, teaching and reading app (Dominican Republic project): https://shedapp.github.io/shed/panoramia/ — includes the AKUDENTAL (CC BY-NC-SA 4.0) and DentalOPG-1550 (CC BY 4.0) open datasets as image packs under `panoramia/data/`.
