@@ -17,8 +17,8 @@
     var local = true;
     return loadScript('lib/ort.min.js').catch(function () { local = false; return loadScript(PAGES + 'lib/ort.min.js').catch(function () { return loadScript(ORT_CDN + 'ort.min.js'); }); }).then(function () {
       if (!root.ort) throw new Error('ONNX Runtime Web not available');
-      // the wasm binary: next to the script when served from our own folder (GitHub Pages, local server), else from the CDN
-      root.ort.env.wasm.wasmPaths = local && !/claude\.ai|claudeusercontent/.test(location.host) ? 'lib/' : ORT_CDN;
+      // the wasm backend (.mjs loader + .wasm) comes from the CDN: the loader needs an absolute URL and both files
+      root.ort.env.wasm.wasmPaths = ORT_CDN;
       root.ort.env.wasm.numThreads = 1;
       state.ort = root.ort; return root.ort;
     });

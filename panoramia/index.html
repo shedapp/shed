@@ -3334,7 +3334,7 @@ legend { font-size: 12.5px; color: var(--ink-2); font-weight: 500; padding: 0 4p
   var I = root.PX_I18N, TX = root.PX_TAXONOMY, DB = root.PX_DB, RUB = root.PX_RUBRIC, DEMO = root.PX_DEMO, OD = root.PX_OPENDATA;
   var t = I.t, pick = I.pick;
 
-  var APP_VERSION = '0.3.0';
+  var APP_VERSION = '0.4.0';
   var SETTINGS_KEY = 'panoramia.settings.v1';
   var ROUTES = ['inicio', 'casos', 'anotar', 'semaforo', 'atlas', 'observatorio', 'evaluacion', 'gobernanza', 'ayuda'];
 
@@ -3758,8 +3758,8 @@ legend { font-size: 12.5px; color: var(--ink-2); font-weight: 500; padding: 0 4p
     var local = true;
     return loadScript('lib/ort.min.js').catch(function () { local = false; return loadScript(PAGES + 'lib/ort.min.js').catch(function () { return loadScript(ORT_CDN + 'ort.min.js'); }); }).then(function () {
       if (!root.ort) throw new Error('ONNX Runtime Web not available');
-      // the wasm binary: next to the script when served from our own folder (GitHub Pages, local server), else from the CDN
-      root.ort.env.wasm.wasmPaths = local && !/claude\.ai|claudeusercontent/.test(location.host) ? 'lib/' : ORT_CDN;
+      // the wasm backend (.mjs loader + .wasm) comes from the CDN: the loader needs an absolute URL and both files
+      root.ort.env.wasm.wasmPaths = ORT_CDN;
       root.ort.env.wasm.numThreads = 1;
       state.ort = root.ort; return root.ort;
     });

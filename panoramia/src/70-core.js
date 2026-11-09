@@ -4,7 +4,7 @@
   var I = root.PX_I18N, TX = root.PX_TAXONOMY, DB = root.PX_DB, RUB = root.PX_RUBRIC, DEMO = root.PX_DEMO, OD = root.PX_OPENDATA;
   var t = I.t, pick = I.pick;
 
-  var APP_VERSION = '0.3.0';
+  var APP_VERSION = '0.4.0';
   var SETTINGS_KEY = 'panoramia.settings.v1';
   var ROUTES = ['inicio', 'casos', 'anotar', 'semaforo', 'atlas', 'observatorio', 'evaluacion', 'gobernanza', 'ayuda'];
 
