@@ -227,7 +227,8 @@ function check(cond, msg) { if (cond) console.log('ok   ' + msg); else { failure
     const mock = require('child_process').spawn(process.execPath, [path.join(__dirname, 'mock_model_server.js')], { env: Object.assign({}, process.env, { PORT: '8765' }), stdio: 'ignore' });
     await sleep(600);
     await cdp.eval("PX.actions['model:check']()"); await sleep(800);
-    check(await cdp.eval("!!(PX.state.an.modelStatus && PX.state.an.modelStatus.ok)") && /mock-yolo/.test(await cdp.eval("document.getElementById('an-panel').innerText")), 'model server health shows the model card');
+    check(await cdp.eval("!!(PX.state.an.modelStatus && PX.state.an.modelStatus.ok && PX.state.an.modelStatus.model.name==='mock-yolo')") && /mock-yolo/.test(await cdp.eval("document.getElementById('an-panel').innerHTML")), 'model server health shows the model card');
+    check(/panoramia-pan-v1|modelo entrenado|trained model/i.test(await cdp.eval("document.getElementById('an-panel').innerText")), 'panel offers the shipped in-browser model');
     const beforeModel = await cdp.eval("(PX.state.an.proposals||[]).length");
     await cdp.eval("PX.actions['model:predict']()"); await sleep(1500);
     const afterModel = await cdp.eval("JSON.stringify((PX.state.an.proposals||[]).filter(p=>/model/.test(p.how)).map(p=>[p.code,p.score,p.fdi,p.how]))");
