@@ -543,4 +543,11 @@ test('autoread: without tooth outlines only radiopacities are proposed; nothing 
   assert.strictEqual(r.anatomy.length, 0); assert.strictEqual(r.findings.length, 1); assert.strictEqual(r.findings[0].code, 'DEN-IMPL');
 });
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
+require('../src/71-model.js');
+test('model: per-class NMS keeps the best of overlapping boxes', () => {
+  const nms = globalThis.PX_MODEL._internal.nms;
+  const boxes = [[0, 0, 10, 10], [1, 1, 11, 11], [50, 50, 60, 60]];
+  const keep = nms(boxes, [0.5, 0.9, 0.7], 0.5);
+  assert.deepStrictEqual(keep.sort(), [1, 2]);
+});
 process.exit(failed ? 1 : 0);

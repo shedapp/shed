@@ -312,16 +312,37 @@
   /** Trained-model block: a local inference server (tools/model_server.py) running the ONNX detector trained with training/train_yolo.py. */
   function modelBlock() {
     var url = state.settings.modelServer || 'http://127.0.0.1:8765', st = an.modelStatus;
+    var M = root.PX_MODEL, card = M && M.ready() ? M.card() : null;
+    var browserPart = '<div class="row" style="gap:6px;flex-wrap:wrap;align-items:center">' +
+      (card ? '<span class="pill ok">' + esc(t('modelOnline', { name: card.name || 'ONNX', n: (card.classes || []).length })) + '</span>' +
+              '<button class="btn sm primary" data-action="model:predictLocal"' + (an.modelBusy ? ' disabled' : '') + '>' + esc(an.modelBusy ? t('autoBusy') : t('modelRun')) + '</button>'
+            : '<button class="btn sm primary" data-action="model:predictLocal"' + (an.modelLoading ? ' disabled' : '') + '>' + esc(an.modelLoading ? t('modelLoading', { p: an.modelLoading }) : t('modelRunFirst')) + '</button>' +
+              '<input type="text" style="width:200px" value="' + attr(state.settings.modelBase || 'models/') + '" data-action="model:base" aria-label="URL" title="' + attr(t('modelBaseHelp')) + '">') +
+      (an.modelError ? '<span class="pill warn">' + esc(an.modelError) + '</span>' : '') + '</div>' + metricsFor(card);
     var status = !st ? '' : st.ok ? '<span class="pill ok">' + esc(t('modelOnline', { name: (st.model && st.model.name) || 'ONNX', n: st.model && st.model.classes ? st.model.classes.length : '?' })) + '</span>' : '<span class="pill warn">' + esc(t('modelOffline')) + '</span>';
-    var card = st && st.ok && st.model && st.model.panoramia && st.model.panoramia['iou0.2'] ? st.model.panoramia['iou0.2'] : null;
-    var metrics = '';
-    if (card) {
-      var keys = ['DEN-RCT', 'DEN-PAR', 'DEN-CAR', 'DEN-ROOT', 'DEN-IMP-H', 'DEN-IMP-D', 'DEN-IMP-U', 'DEN-FIL', 'DEN-CRN', 'DEN-BRG', 'DEN-MIS', 'DEN-PBL'].filter(function (k) { return card[k] && card[k].refs; });
-      metrics = '<div class="chips" style="margin-top:6px">' + keys.map(function (k) { var m = card[k]; var code = k.replace(/^DEN-IMP-.$/, 'DEN-IMP'); return '<span class="chip" title="' + attr(k + ' · n=' + m.refs) + '"><span class="sw" style="background:' + colorOf(code) + '"></span>' + esc(PX.findingName(code)) + (/-IMP-/.test(k) ? ' ' + k.slice(-1) : '') + ' <span class="cnt">' + Math.round((m.sensitivity || 0) * 100) + '% / ' + Math.round((m.ppv || 0) * 100) + '%</span></span>'; }).join('') + '</div><p class="small muted" style="margin:4px 0 0">' + esc(t('modelMetricsHelp')) + '</p>';
-    }
-    return '<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--line)"><h4 style="margin:0 0 4px">' + esc(t('modelTitle')) + '</h4><p class="small muted" style="margin:0 0 6px">' + esc(t('modelHelp')) + '</p>' +
+    var serverPart = '<details style="margin-top:8px"><summary class="small muted">' + esc(t('modelServerTitle')) + '</summary><p class="small muted" style="margin:4px 0 6px">' + esc(t('modelHelp')) + '</p>' +
       '<div class="row" style="gap:6px;flex-wrap:wrap"><input type="text" style="width:220px" value="' + attr(url) + '" data-action="model:url" aria-label="URL"><button class="btn sm" data-action="model:check">' + esc(t('modelCheck')) + '</button>' +
-      '<button class="btn sm primary" data-action="model:predict"' + (st && st.ok && !an.modelBusy ? '' : ' disabled') + '>' + esc(an.modelBusy ? t('autoBusy') : t('modelRun')) + '</button>' + status + '</div>' + metrics + '</div>';
+      '<button class="btn sm" data-action="model:predict"' + (st && st.ok && !an.modelBusy ? '' : ' disabled') + '>' + esc(an.modelBusy ? t('autoBusy') : t('modelRun')) + '</button>' + status + '</div>' + (st && st.ok ? metricsFor(st.model) : '') + '</details>';
+    return '<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--line)"><h4 style="margin:0 0 4px">' + esc(t('modelTitle')) + '</h4><p class="small muted" style="margin:0 0 6px">' + esc(t('modelBrowserHelp')) + '</p>' + browserPart + serverPart + '</div>';
+  }
+  function metricsFor(model) {
+    var card = model && model.panoramia && model.panoramia['iou0.2'] ? model.panoramia['iou0.2'] : null;
+    if (!card) return '';
+    var keys = ['DEN-RCT', 'DEN-PAR', 'DEN-CAR', 'DEN-ROOT', 'DEN-IMP-H', 'DEN-IMP-D', 'DEN-IMP-U', 'DEN-FIL', 'DEN-CRN', 'DEN-BRG', 'DEN-MIS', 'DEN-PBL'].filter(function (k) { return card[k] && card[k].refs; });
+    return '<div class="chips" style="margin-top:6px">' + keys.map(function (k) { var m = card[k]; var code = k.replace(/^DEN-IMP-.$/, 'DEN-IMP'); return '<span class="chip" title="' + attr(k + ' · n=' + m.refs) + '"><span class="sw" style="background:' + colorOf(code) + '"></span>' + esc(PX.findingName(code)) + (/-IMP-/.test(k) ? ' ' + k.slice(-1) : '') + ' <span class="cnt">' + Math.round((m.sensitivity || 0) * 100) + '% / ' + Math.round((m.ppv || 0) * 100) + '%</span></span>'; }).join('') + '</div><p class="small muted" style="margin:4px 0 0">' + esc(t('modelMetricsHelp')) + '</p>';
+  }
+  /** Turns detector output (server or in-browser) into PanoramIA proposals: taxonomy codes, FDI by overlap, side, impaction subtype in the note. */
+  function ingestModelProposals(c, j) {
+    var W = c.width || j.width || 1, H = c.height || j.height || 1, sx = j.width ? W / j.width : 1, sy = j.height ? H / j.height : 1;
+    var teeth = teethFor(c);
+    return (j.proposals || []).map(function (p) {
+      var code = String(p.code || '').replace(/^DEN-IMP-([HDU])$/, 'DEN-IMP'), sub = /^DEN-IMP-([HDU])$/.test(p.code) ? RegExp.$1 : '';
+      if (!TX.FINDING_BY_CODE[code]) return null;
+      var pts = (p.shape && p.shape.points ? p.shape.points : [[p.box.x, p.box.y], [p.box.x + p.box.w, p.box.y], [p.box.x + p.box.w, p.box.y + p.box.h], [p.box.x, p.box.y + p.box.h]]).map(function (q) { return [Math.round(q[0] * sx), Math.round(q[1] * sy)]; });
+      var b = G.bbox(pts), def = TX.FINDING_BY_CODE[code], fdi = null;
+      if (def.tooth && teeth.length && root.PX_OPENDATA) fdi = root.PX_OPENDATA.assignFdi([b.x, b.y, b.w, b.h], teeth.map(function (tt) { var bb = G.bbox(tt.poly); return { fdi: tt.fdi, box: [bb.x, bb.y, bb.w, bb.h] }; }));
+      return { code: code, shape: { type: 'polygon', points: pts }, box: { x: b.x, y: b.y, w: Math.max(1, b.w), h: Math.max(1, b.h) }, confidence: 'probable', fdi: fdi, side: def.sided ? G.sideOf(pts, W) : null, score: p.score, how: (p.how || ('model ' + ((j.model && j.model.name) || 'ONNX'))) + (sub ? ' · ' + ({ H: 'horizontal', D: 'distoangular', U: 'unerupted third molar' })[sub] : '') };
+    }).filter(Boolean);
   }
   /** Tooth outlines available for the automatic reading: the published reference, else the reader's own ANA-TTH polygons with a FDI number. */
   function teethFor(c) {
@@ -475,19 +496,28 @@
     var url = (state.settings.modelServer || 'http://127.0.0.1:8765').replace(/\/$/, '');
     an.modelBusy = true; renderPanel();
     fetch(url + '/predict?min_score=0.25', { method: 'POST', body: im.blob, headers: { 'Content-Type': im.blob.type || 'application/octet-stream' } }).then(function (r) { return r.json(); }).then(function (j) {
-      var W = c.width || j.width || 1, H = c.height || j.height || 1, sx = j.width ? W / j.width : 1, sy = j.height ? H / j.height : 1;
-      var props = (j.proposals || []).map(function (p) {
-        var code = String(p.code || '').replace(/^DEN-IMP-([HDU])$/, 'DEN-IMP'), sub = /^DEN-IMP-([HDU])$/.test(p.code) ? RegExp.$1 : '';
-        if (!TX.FINDING_BY_CODE[code]) return null;
-        var pts = (p.shape && p.shape.points ? p.shape.points : [[p.box.x, p.box.y], [p.box.x + p.box.w, p.box.y], [p.box.x + p.box.w, p.box.y + p.box.h], [p.box.x, p.box.y + p.box.h]]).map(function (q) { return [Math.round(q[0] * sx), Math.round(q[1] * sy)]; });
-        var b = G.bbox(pts), def = TX.FINDING_BY_CODE[code];
-        var teeth = teethFor(c), fdi = null;
-        if (def.tooth && teeth.length && root.PX_OPENDATA) fdi = root.PX_OPENDATA.assignFdi([b.x, b.y, b.w, b.h], teeth.map(function (tt) { var bb = G.bbox(tt.poly); return { fdi: tt.fdi, box: [bb.x, bb.y, bb.w, bb.h] }; }));
-        return { code: code, shape: { type: 'polygon', points: pts }, box: { x: b.x, y: b.y, w: Math.max(1, b.w), h: Math.max(1, b.h) }, confidence: 'probable', fdi: fdi, side: def.sided ? G.sideOf(pts, W) : null, score: p.score, how: (p.how || ('model ' + ((j.model && j.model.name) || 'ONNX'))) + (sub ? ' · ' + ({ H: 'horizontal', D: 'distoangular', U: 'unerupted third molar' })[sub] : '') };
-      }).filter(Boolean);
+      var props = ingestModelProposals(c, j);
       an.proposals = (an.proposals || []).concat(props); an.modelBusy = false; an.focusProposal = null;
-      return PX.audit('model.run', c.pseudonym, ((j.model && j.model.name) || 'ONNX') + ' · ' + props.length + ' proposals · ' + (j.ms || '?') + ' ms');
+      return PX.audit('model.run', c.pseudonym, ((j.model && j.model.name) || 'ONNX') + ' · server · ' + props.length + ' proposals · ' + (j.ms || '?') + ' ms');
     }).then(function () { syncBoxes(); renderPanel(); }).catch(function (e) { console.error(e); an.modelBusy = false; an.modelStatus = { ok: false }; renderPanel(); PX.toast(t('modelFailed'), 'crit'); });
+  };
+  A['model:base'] = function (arg, el) { state.settings.modelBase = el.value.trim(); PX.saveSettings(); };
+  A['model:load'] = function () {
+    if (!root.PX_MODEL) return;
+    an.modelLoading = '…'; an.modelError = null; renderPanel();
+    root.PX_MODEL.load(state.settings.modelBase || 'models/', function (d, n) { an.modelLoading = d + '/' + n; renderPanel(); }).then(function (card) {
+      an.modelLoading = null; renderPanel(); PX.toast(t('modelLoaded', { name: card.name || 'ONNX' }));
+    }).catch(function (e) { console.error(e); an.modelLoading = null; an.modelError = t('modelLoadFailed'); renderPanel(); });
+  };
+  A['model:predictLocal'] = function () {
+    var c = PX.caseById(state.currentCaseId); if (!c || !root.PX_MODEL) return;
+    if (!root.PX_MODEL.ready()) { an.modelLoading = '…'; an.modelError = null; renderPanel(); return root.PX_MODEL.load(state.settings.modelBase || 'models/', function (d, n) { an.modelLoading = d + '/' + n; renderPanel(); }).then(function () { an.modelLoading = null; A['model:predictLocal'](); }).catch(function (e) { console.error(e); an.modelLoading = null; an.modelError = t('modelLoadFailed'); renderPanel(); }); }
+    an.modelBusy = true; renderPanel();
+    PX.imageBitmap(c.id).then(function (bmp) { if (!bmp) throw new Error('no image'); return root.PX_MODEL.predict(bmp, { minScore: 0.25 }); }).then(function (j) {
+      var props = ingestModelProposals(c, j);
+      an.proposals = (an.proposals || []).concat(props); an.modelBusy = false; an.focusProposal = null;
+      return PX.audit('model.run', c.pseudonym, ((j.model && j.model.name) || 'ONNX') + ' · browser · ' + props.length + ' proposals · ' + j.ms + ' ms');
+    }).then(function () { syncBoxes(); renderPanel(); }).catch(function (e) { console.error(e); an.modelBusy = false; renderPanel(); PX.toast(t('modelFailed'), 'crit'); });
   };
   A['an:detectClose'] = function () { an.proposals = null; an.focusProposal = null; syncBoxes(); renderPanel(); };
   A['an:proposalFocus'] = function (arg, el, ev) {

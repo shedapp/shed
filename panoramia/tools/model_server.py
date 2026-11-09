@@ -48,6 +48,8 @@ print('PanoramIA model server · model', args.model, '· classes', len(names), '
 
 
 def letterbox(im, size):
+    if card.get('preprocess') == 'stretch':  # model trained on stretched square copies: stretch, no padding
+        return im.resize((size, size), Image.BILINEAR), None, 0, 0
     w, h = im.size; s = min(size / w, size / h); nw, nh = round(w * s), round(h * s)
     canvas = Image.new('RGB', (size, size), (114, 114, 114)); canvas.paste(im.resize((nw, nh), Image.BILINEAR), ((size - nw) // 2, (size - nh) // 2))
     return canvas, s, (size - nw) // 2, (size - nh) // 2
@@ -70,6 +72,8 @@ def nms(boxes, scores, thr=0.5):
 def predict(img_bytes, min_score=0.25):
     im = Image.open(io.BytesIO(img_bytes)).convert('RGB'); W, H = im.size
     lb, s, px, py = letterbox(im, IMGSZ)
+    sx = sy = s
+    if s is None: sx, sy = IMGSZ / W, IMGSZ / H
     x = np.asarray(lb, dtype=np.float32).transpose(2, 0, 1)[None] / 255.0
     t0 = time.time(); out = sess.run(None, {inp.name: x})[0]
     if out.ndim == 3 and out.shape[1] == 4 + len(names): out = out[0].T          # [N, 4+nc]
@@ -78,7 +82,7 @@ def predict(img_bytes, min_score=0.25):
     if out.shape[1] == 6:  # exported with nms=True: x1,y1,x2,y2,score,cls
         for x1, y1, x2, y2, sc, cl in out:
             if sc < min_score: continue
-            props.append((int(cl), float(sc), [(x1 - px) / s, (y1 - py) / s, (x2 - px) / s, (y2 - py) / s]))
+            props.append((int(cl), float(sc), [(x1 - px) / sx, (y1 - py) / sy, (x2 - px) / sx, (y2 - py) / sy]))
     else:
         cls_scores = out[:, 4:]; cls = cls_scores.argmax(1); sc = cls_scores.max(1)
         m = sc >= min_score; xywh = out[m, :4]; cls = cls[m]; sc = sc[m]
@@ -86,7 +90,7 @@ def predict(img_bytes, min_score=0.25):
         for c in np.unique(cls):
             idx = np.where(cls == c)[0]
             for k in nms(xyxy[idx], sc[idx], 0.5):
-                b = xyxy[idx[k]]; props.append((int(c), float(sc[idx[k]]), [(b[0] - px) / s, (b[1] - py) / s, (b[2] - px) / s, (b[3] - py) / s]))
+                b = xyxy[idx[k]]; props.append((int(c), float(sc[idx[k]]), [(b[0] - px) / sx, (b[1] - py) / sy, (b[2] - px) / sx, (b[3] - py) / sy]))
     res = []
     for c, score, (x1, y1, x2, y2) in props:
         x1, y1, x2, y2 = max(0, x1), max(0, y1), min(W, x2), min(H, y2)

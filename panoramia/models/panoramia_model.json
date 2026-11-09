@@ -1,0 +1,261 @@
+{
+ "name": "panoramia-pan-v1",
+ "family": "YOLO (Ultralytics) yolo11s.pt",
+ "imgsz": 640,
+ "classes": [
+  "DEN-CAR",
+  "DEN-FIL",
+  "DEN-CRN",
+  "DEN-BRG",
+  "DEN-RCT",
+  "DEN-PAR",
+  "DEN-PBL",
+  "DEN-ROOT",
+  "DEN-MIS",
+  "DEN-IMP-H",
+  "DEN-IMP-D",
+  "DEN-IMP-U"
+ ],
+ "trainedOn": "DentalOPG-1550 (Roboflow YOLOv8 export, 640×640 stretched copies), 12 PanoramIA classes",
+ "epochs": 80,
+ "date": "2026-11-09",
+ "conf": 0.25,
+ "msPerImageCpuOrGpu": 25,
+ "ultralytics": {
+  "mAP50": 0.6249603731356459,
+  "mAP50_95": 0.22508341444275357,
+  "perClass": {
+   "DEN-CAR": {
+    "precision": 0.734506928535416,
+    "recall": 0.4191871204415188,
+    "AP50": 0.509829971019886,
+    "AP50_95": 0.17549159662291963
+   },
+   "DEN-FIL": {
+    "precision": 0.6957240647744682,
+    "recall": 0.6652449119527666,
+    "AP50": 0.5783144934708202,
+    "AP50_95": 0.19264939437808867
+   },
+   "DEN-CRN": {
+    "precision": 0.9072377839962582,
+    "recall": 0.96875,
+    "AP50": 0.9113692814124864,
+    "AP50_95": 0.458591653350775
+   },
+   "DEN-BRG": {
+    "precision": 0.874787933026822,
+    "recall": 1.0,
+    "AP50": 0.995,
+    "AP50_95": 0.2935833333333333
+   },
+   "DEN-RCT": {
+    "precision": 0.5529475714074966,
+    "recall": 0.46153846153846156,
+    "AP50": 0.4365284330110713,
+    "AP50_95": 0.11216182871036062
+   },
+   "DEN-PAR": {
+    "precision": 0.17794206158519785,
+    "recall": 0.2,
+    "AP50": 0.22000000000000003,
+    "AP50_95": 0.076625
+   },
+   "DEN-PBL": {
+    "precision": 0.307193415399243,
+    "recall": 0.6666666666666666,
+    "AP50": 0.665,
+    "AP50_95": 0.08325
+   },
+   "DEN-ROOT": {
+    "precision": 0.7372575832975662,
+    "recall": 0.5408163265306123,
+    "AP50": 0.6152852682631593,
+    "AP50_95": 0.19813615319898617
+   },
+   "DEN-MIS": {
+    "precision": 0.7409656852301174,
+    "recall": 0.6729559748427673,
+    "AP50": 0.6820346067548441,
+    "AP50_95": 0.2052287956507739
+   },
+   "DEN-IMP-H": {
+    "precision": 0.7273196666393723,
+    "recall": 0.6363636363636364,
+    "AP50": 0.7140764820556471,
+    "AP50_95": 0.3520546450691191
+   },
+   "DEN-IMP-D": {
+    "precision": 0.6386772220479828,
+    "recall": 0.3076923076923077,
+    "AP50": 0.33069297338735637,
+    "AP50_95": 0.1643077683653059
+   },
+   "DEN-IMP-U": {
+    "precision": 0.6883144333718002,
+    "recall": 0.8333333333333334,
+    "AP50": 0.8413929682524787,
+    "AP50_95": 0.3889208046333802
+   }
+  }
+ },
+ "panoramia": {
+  "iou0.2": {
+   "DEN-CAR": {
+    "refs": 165,
+    "sensitivity": 0.564,
+    "ppv": 0.775,
+    "proposals": 120
+   },
+   "DEN-FIL": {
+    "refs": 55,
+    "sensitivity": 0.855,
+    "ppv": 0.825,
+    "proposals": 57
+   },
+   "DEN-CRN": {
+    "refs": 64,
+    "sensitivity": 1.0,
+    "ppv": 0.956,
+    "proposals": 68
+   },
+   "DEN-BRG": {
+    "refs": 4,
+    "sensitivity": 1.0,
+    "ppv": 0.667,
+    "proposals": 6
+   },
+   "DEN-RCT": {
+    "refs": 91,
+    "sensitivity": 0.769,
+    "ppv": 0.809,
+    "proposals": 89
+   },
+   "DEN-PAR": {
+    "refs": 10,
+    "sensitivity": 0.5,
+    "ppv": 0.357,
+    "proposals": 14
+   },
+   "DEN-PBL": {
+    "refs": 3,
+    "sensitivity": 0.667,
+    "ppv": 0.286,
+    "proposals": 7
+   },
+   "DEN-ROOT": {
+    "refs": 98,
+    "sensitivity": 0.724,
+    "ppv": 0.911,
+    "proposals": 79
+   },
+   "DEN-MIS": {
+    "refs": 159,
+    "sensitivity": 0.818,
+    "ppv": 0.83,
+    "proposals": 159
+   },
+   "DEN-IMP-H": {
+    "refs": 22,
+    "sensitivity": 0.636,
+    "ppv": 0.7,
+    "proposals": 20
+   },
+   "DEN-IMP-D": {
+    "refs": 13,
+    "sensitivity": 0.385,
+    "ppv": 0.455,
+    "proposals": 11
+   },
+   "DEN-IMP-U": {
+    "refs": 54,
+    "sensitivity": 0.889,
+    "ppv": 0.615,
+    "proposals": 78
+   }
+  },
+  "iou0.5": {
+   "DEN-CAR": {
+    "refs": 165,
+    "sensitivity": 0.479,
+    "ppv": 0.658,
+    "proposals": 120
+   },
+   "DEN-FIL": {
+    "refs": 55,
+    "sensitivity": 0.691,
+    "ppv": 0.667,
+    "proposals": 57
+   },
+   "DEN-CRN": {
+    "refs": 64,
+    "sensitivity": 0.969,
+    "ppv": 0.912,
+    "proposals": 68
+   },
+   "DEN-BRG": {
+    "refs": 4,
+    "sensitivity": 1.0,
+    "ppv": 0.667,
+    "proposals": 6
+   },
+   "DEN-RCT": {
+    "refs": 91,
+    "sensitivity": 0.495,
+    "ppv": 0.506,
+    "proposals": 89
+   },
+   "DEN-PAR": {
+    "refs": 10,
+    "sensitivity": 0.3,
+    "ppv": 0.214,
+    "proposals": 14
+   },
+   "DEN-PBL": {
+    "refs": 3,
+    "sensitivity": 0.667,
+    "ppv": 0.286,
+    "proposals": 7
+   },
+   "DEN-ROOT": {
+    "refs": 98,
+    "sensitivity": 0.592,
+    "ppv": 0.734,
+    "proposals": 79
+   },
+   "DEN-MIS": {
+    "refs": 159,
+    "sensitivity": 0.723,
+    "ppv": 0.723,
+    "proposals": 159
+   },
+   "DEN-IMP-H": {
+    "refs": 22,
+    "sensitivity": 0.636,
+    "ppv": 0.7,
+    "proposals": 20
+   },
+   "DEN-IMP-D": {
+    "refs": 13,
+    "sensitivity": 0.308,
+    "ppv": 0.364,
+    "proposals": 11
+   },
+   "DEN-IMP-U": {
+    "refs": 54,
+    "sensitivity": 0.87,
+    "ppv": 0.603,
+    "proposals": 78
+   }
+  }
+ },
+ "notes": "Single-source labels (DentalOPG-1550, CC BY 4.0). Not clinically validated: proposals must be confirmed by the reader. Sensitivity/PPV are on the held-out test split at conf 0.25; see STARD-AI plan for the Dominican validation. Trained on 640×640 stretched copies: inference must stretch the whole radiograph to 640×640 (preprocess=stretch), not letterbox it.",
+ "preprocess": "stretch",
+ "parts": [
+  "panoramia_yolo.part00.jpg",
+  "panoramia_yolo.part01.jpg",
+  "panoramia_yolo.part02.jpg"
+ ],
+ "bytes": 37945423,
+ "partNote": "Weights are the ONNX file split in parts (named .jpg only so static hosts serve them); the app concatenates them."
+}

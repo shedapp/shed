@@ -15,7 +15,7 @@ import numpy as np
 ap = argparse.ArgumentParser()
 ap.add_argument('--data', required=True); ap.add_argument('--model', default='yolo11s.pt'); ap.add_argument('--imgsz', type=int, default=1024)
 ap.add_argument('--epochs', type=int, default=100); ap.add_argument('--batch', type=int, default=8); ap.add_argument('--out', default='runs/panoramia')
-ap.add_argument('--conf', type=float, default=0.25); ap.add_argument('--name', default='panoramia-pan-v1'); ap.add_argument('--skip-train', action='store_true')
+ap.add_argument('--conf', type=float, default=0.25); ap.add_argument('--preprocess', default='letterbox', help="'stretch' when the training images were stretched to a square (the 640 Roboflow export)"); ap.add_argument('--name', default='panoramia-pan-v1'); ap.add_argument('--skip-train', action='store_true')
 args = ap.parse_args()
 
 from ultralytics import YOLO
@@ -80,7 +80,7 @@ json.dump(preds_out, open(os.path.join(args.out, 'test_predictions.json'), 'w'))
 # ---- export ONNX + card ----
 onnx_path = model.export(format='onnx', imgsz=args.imgsz, opset=12, simplify=True, dynamic=False)
 final_onnx = os.path.join(args.out, 'panoramia_yolo.onnx'); os.replace(onnx_path, final_onnx)
-card = {'name': args.name, 'family': 'YOLO (Ultralytics) ' + os.path.basename(args.model), 'imgsz': args.imgsz, 'classes': names, 'trainedOn': os.path.abspath(args.data),
+card = {'name': args.name, 'preprocess': args.preprocess, 'family': 'YOLO (Ultralytics) ' + os.path.basename(args.model), 'imgsz': args.imgsz, 'classes': names, 'trainedOn': os.path.abspath(args.data),
         'epochs': args.epochs, 'date': time.strftime('%Y-%m-%d'), 'conf': args.conf, 'msPerImageCpuOrGpu': round(ms),
         'ultralytics': ul, 'panoramia': pan,
         'notes': 'Single-source labels (DentalOPG-1550, CC BY 4.0). Not clinically validated: proposals must be confirmed by the reader. '
