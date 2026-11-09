@@ -140,6 +140,8 @@
       var isAna = TX.isAnatomy(pr.code);
       items.push({ id: 'p_' + i, x: pr.box.x, y: pr.box.y, w: pr.box.w, h: pr.box.h, shape: pr.shape, color: colorOf(pr.code), dashed: true, anatomy: isAna, fillAlpha: isAna ? 0 : 0.28, alpha: an.focusProposal === i ? 1 : 0.85, selectable: false, label: '? ' + (i + 1) + (state.ui.labelMode === 'name' ? ' ' + PX.findingName(pr.code) : ' ' + pr.code) + (pr.fdi ? ' ' + pr.fdi : '') });
     });
+    var fp = an.proposals && an.focusProposal != null ? an.proposals[an.focusProposal] : null;
+    if (fp && fp.context && fp.context.points) { var cb = G.bbox(fp.context.points); items.push({ id: 'ctx', x: cb.x, y: cb.y, w: cb.w, h: cb.h, shape: { type: 'polygon', points: fp.context.points }, color: '#FFFFFF', dashed: true, fillAlpha: 0, alpha: 0.9, selectable: false, label: (I.getLang() === 'en' ? 'tooth' : 'diente') + (fp.context.fdi ? ' ' + fp.context.fdi : '') }); }
     if (an.af) items.push({ id: an.af.id || 'new', x: an.af.box.x, y: an.af.box.y, w: an.af.box.w, h: an.af.box.h, shape: an.af.shape, color: an.af.code ? colorOf(an.af.code) : '#FFFFFF', anatomy: an.af.code ? TX.isAnatomy(an.af.code) : false, selectable: true, label: an.af.code ? labelFor({ code: an.af.code, fdi: an.af.fdi, box: an.af.box, shape: an.af.shape }, c) : '' });
     an.viewer.setBoxes(items);
     an.viewer.setOverlay(c.ref && state.ui.showRef && root.PX_OPENDATA ? root.PX_OPENDATA.overlayShapes(c.ref) : []);
@@ -344,6 +346,25 @@
       return { code: code, shape: { type: 'polygon', points: pts }, box: { x: b.x, y: b.y, w: Math.max(1, b.w), h: Math.max(1, b.h) }, confidence: 'probable', fdi: fdi, side: def.sided ? G.sideOf(pts, W) : null, score: p.score, how: (p.how || ('model ' + ((j.model && j.model.name) || 'ONNX'))) + (sub ? ' · ' + ({ H: 'horizontal', D: 'distoangular', U: 'unerupted third molar' })[sub] : '') };
     }).filter(Boolean);
   }
+  /** Turns the detector boxes into outlines (PX_CONTOUR): caries/lesion edge, root-canal filling, restorations, tooth outline; relabels edentulous gaps. */
+  function contourNote(pr) {
+    var q = (pr.contour && pr.contour.quality) || {}, en = I.getLang() === 'en', bits = [];
+    if (pr.was) bits.push(en ? 'no mineralised tissue: edentulous space, not a fracture' : 'sin tejido mineralizado: espacio edéntulo, no fractura');
+    if (pr.code === 'DEN-RCT' && q.reaches != null) bits.push((en ? 'filling covers ' : 'obturación cubre ') + Math.round(q.reaches * 100) + '% ' + (en ? 'of root length' : 'de la longitud radicular') + (q.shortOfApexPx > 6 ? (en ? ' · short of apex' : ' · corta del ápice') : '') + (q.voids > 0.08 ? (en ? ' · possible voids' : ' · posibles huecos') : ''));
+    if (pr.code === 'DEN-CAR' && q.reachesSurface != null) bits.push(q.reachesSurface ? (en ? 'reaches tooth surface' : 'llega a la superficie') : (en ? 'inside the tooth, no surface opening seen' : 'dentro del diente, sin abertura a la superficie'));
+    return bits.join(' · ');
+  }
+  function refineProps(c, props) {
+    if (!root.PX_CONTOUR || !props.length) return Promise.resolve(props);
+    return PX.imageBitmap(c.id).then(function (bmp) {
+      if (!bmp) return props;
+      var W0 = c.width || bmp.width, sc = Math.min(1, 1400 / bmp.width), cw = Math.round(bmp.width * sc), ch = Math.round(bmp.height * sc);
+      var cv = document.createElement('canvas'); cv.width = cw; cv.height = ch; var cx = cv.getContext('2d', { willReadFrequently: true }); cx.drawImage(bmp, 0, 0, cw, ch);
+      var img = cx.getImageData(0, 0, cw, ch), scale = cw / W0, shaped = props.filter(function (p) { return p.box; });
+      var out = root.PX_CONTOUR.refine(img, shaped, teethFor(c), scale);
+      return out.map(function (pr) { var note = contourNote(pr); if (pr.contour && pr.contour.ok) pr.how = (pr.how || '') + ' · ' + (I.getLang() === 'en' ? 'outlined' : 'contorno') + (note ? ' · ' + note : ''); else if (note) pr.how = (pr.how || '') + ' · ' + note; return pr; });
+    }).catch(function (e) { console.error(e); return props; });
+  }
   /** Tooth outlines available for the automatic reading: the published reference, else the reader's own ANA-TTH polygons with a FDI number. */
   function teethFor(c) {
     if (c.ref && c.ref.teeth && c.ref.teeth.length) return c.ref.teeth.map(function (tt) { return { fdi: tt.fdi, poly: tt.poly }; });
@@ -496,9 +517,10 @@
     var url = (state.settings.modelServer || 'http://127.0.0.1:8765').replace(/\/$/, '');
     an.modelBusy = true; renderPanel();
     fetch(url + '/predict?min_score=0.25', { method: 'POST', body: im.blob, headers: { 'Content-Type': im.blob.type || 'application/octet-stream' } }).then(function (r) { return r.json(); }).then(function (j) {
-      var props = ingestModelProposals(c, j);
-      an.proposals = (an.proposals || []).concat(props); an.modelBusy = false; an.focusProposal = null;
-      return PX.audit('model.run', c.pseudonym, ((j.model && j.model.name) || 'ONNX') + ' · server · ' + props.length + ' proposals · ' + (j.ms || '?') + ' ms');
+      return refineProps(c, ingestModelProposals(c, j)).then(function (props) {
+        an.proposals = (an.proposals || []).concat(props); an.modelBusy = false; an.focusProposal = null;
+        return PX.audit('model.run', c.pseudonym, ((j.model && j.model.name) || 'ONNX') + ' · server · ' + props.length + ' proposals · ' + (j.ms || '?') + ' ms');
+      });
     }).then(function () { syncBoxes(); renderPanel(); }).catch(function (e) { console.error(e); an.modelBusy = false; an.modelStatus = { ok: false }; renderPanel(); PX.toast(t('modelFailed'), 'crit'); });
   };
   A['model:base'] = function (arg, el) { state.settings.modelBase = el.value.trim(); PX.saveSettings(); };
@@ -514,9 +536,10 @@
     if (!root.PX_MODEL.ready()) { an.modelLoading = '…'; an.modelError = null; renderPanel(); return root.PX_MODEL.load(state.settings.modelBase || 'models/', function (d, n) { an.modelLoading = d + '/' + n; renderPanel(); }).then(function () { an.modelLoading = null; A['model:predictLocal'](); }).catch(function (e) { console.error(e); an.modelLoading = null; an.modelError = t('modelLoadFailed'); renderPanel(); }); }
     an.modelBusy = true; renderPanel();
     PX.imageBitmap(c.id).then(function (bmp) { if (!bmp) throw new Error('no image'); return root.PX_MODEL.predict(bmp, { minScore: 0.25 }); }).then(function (j) {
-      var props = ingestModelProposals(c, j);
-      an.proposals = (an.proposals || []).concat(props); an.modelBusy = false; an.focusProposal = null;
-      return PX.audit('model.run', c.pseudonym, ((j.model && j.model.name) || 'ONNX') + ' · browser · ' + props.length + ' proposals · ' + j.ms + ' ms');
+      return refineProps(c, ingestModelProposals(c, j)).then(function (props) {
+        an.proposals = (an.proposals || []).concat(props); an.modelBusy = false; an.focusProposal = null;
+        return PX.audit('model.run', c.pseudonym, ((j.model && j.model.name) || 'ONNX') + ' · browser · ' + props.length + ' proposals · ' + j.ms + ' ms');
+      });
     }).then(function () { syncBoxes(); renderPanel(); }).catch(function (e) { console.error(e); an.modelBusy = false; renderPanel(); PX.toast(t('modelFailed'), 'crit'); });
   };
   A['an:detectClose'] = function () { an.proposals = null; an.focusProposal = null; syncBoxes(); renderPanel(); };

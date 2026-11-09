@@ -550,4 +550,21 @@ test('model: per-class NMS keeps the best of overlapping boxes', () => {
   const keep = nms(boxes, [0.5, 0.9, 0.7], 0.5);
   assert.deepStrictEqual(keep.sort(), [1, 2]);
 });
+require('../src/69-contour.js');
+test('contour: caries edge, root-canal filling and edentulous gap come out as outlines', () => {
+  const CT = globalThis.PX_CONTOUR, W = 300, H = 300, d = new Uint8ClampedArray(W * H * 4);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    let v = 70 + ((x * 7 + y * 13) % 9);
+    if (x > 100 && x < 200 && y > 60 && y < 260) v = 170 + ((x + y) % 7);
+    const u = (x - 150) / 14, w = (y - 110) / 18; if (u * u + w * w < 1) v = 95;
+    if (Math.abs(x - 150) < 4 && y > 170 && y < 245) v = 235;
+    const i = (y * W + x) * 4; d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
+  }
+  const out = CT.refine({ width: W, height: H, data: d }, [{ code: 'DEN-CAR', box: { x: 125, y: 85, w: 50, h: 50 } }, { code: 'DEN-RCT', box: { x: 130, y: 160, w: 40, h: 100 } }], [], 1);
+  const car = out[0], rct = out[1];
+  assert.ok(car.contour.ok && car.shape.type === 'polygon' && car.shape.points.length > 8, 'caries outline');
+  assert.ok(Math.abs(car.box.x - 136) < 4 && Math.abs(car.box.w - 28) < 5 && Math.abs(car.box.h - 36) < 5, 'caries edge matches the dark region, not the box: ' + JSON.stringify(car.box));
+  assert.ok(rct.contour.ok && rct.box.w < 14 && rct.box.h > 60, 'root filling is a thin elongated outline: ' + JSON.stringify(rct.box));
+  assert.ok(rct.contour.quality.reaches > 0.4 && rct.contour.quality.voids < 0.1, 'filling length and voids are measured');
+});
 process.exit(failed ? 1 : 0);
